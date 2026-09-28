@@ -1,0 +1,6 @@
+# Overlay for the existing production Compose project.
+# Use together with /home/ecs-user/sub2api-deploy/docker-compose.yml.
+# Set SUB2API_CUSTOM_IMAGE to a verified tag or immutable image digest.
+services:
+  sub2api:
+    image: ${SUB2API_CUSTOM_IMAGE:?Set SUB2API_CUSTOM_IMAGE to the verified custom image}
