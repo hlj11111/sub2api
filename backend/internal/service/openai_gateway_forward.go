@@ -18,7 +18,26 @@ import (
 )
 
 // Forward forwards request to OpenAI API
-func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, account *Account, body []byte) (*OpenAIForwardResult, error) {
+func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, account *Account, body []byte) (forwardResult *OpenAIForwardResult, forwardErr error) {
+	if err := checkOpenAIContinuityBeforeForward(ctx, account); err != nil {
+		return nil, err
+	}
+
+	defer func() {
+		if forwardErr == nil && forwardResult != nil && forwardResult.UpstreamTerminalEvent != "response.failed" && forwardResult.UpstreamTerminalEvent != "response.incomplete" {
+			CompleteOpenAIContinuity(ctx, account)
+		}
+	}()
+
+	if account != nil {
+		if err := CheckAccountAccess(ctx, account.ID, nil); err != nil {
+			return nil, err
+		}
+	}
+
+	if continuityEnabled(ctx) && account != nil && strings.TrimSpace(gjson.GetBytes(body, "previous_response_id").String()) != "" && (account.UsesNativeCNResponses() || shouldForwardOpenAIResponsesViaRawChatCompletions(account)) {
+		return nil, ErrOpenAIContextIncomplete
+	}
 	beginUpstreamResponseModelObservation(c)
 	ClearActualOpenAIUpstreamEndpoint(c)
 	if shouldForwardOpenAIResponsesViaRawChatCompletions(account) {
@@ -636,7 +655,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 	if clampedCap, ok := ollamaCloudResponsesMaxOutputTokensClamp(account, upstreamModel, body); ok {
 		markPatchSet("max_output_tokens", clampedCap)
 	}
-	if wsDecision.Transport != OpenAIUpstreamTransportResponsesWebsocketV2 &&
+	if !continuityEnabled(ctx) && wsDecision.Transport != OpenAIUpstreamTransportResponsesWebsocketV2 &&
 		!account.IsOpenAIApiKey() && gjson.GetBytes(body, "previous_response_id").Exists() {
 		markPatchDelete("previous_response_id")
 	}
@@ -811,6 +830,9 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		wsPrevResponseRecoveryTried := false
 		wsInvalidEncryptedContentRecoveryTried := false
 		recoverPrevResponseNotFound := func(attempt int) bool {
+			if continuityEnabled(ctx) {
+				return false
+			}
 			if wsPrevResponseRecoveryTried {
 				return false
 			}
@@ -867,7 +889,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			}
 			previousResponseID := openAIWSPayloadString(wsReqBody, "previous_response_id")
 			hasFunctionCallOutput := HasFunctionCallOutput(wsReqBody)
-			if previousResponseID != "" && !hasFunctionCallOutput {
+			if previousResponseID != "" && !hasFunctionCallOutput && !continuityEnabled(ctx) {
 				delete(wsReqBody, "previous_response_id")
 			}
 			wsInvalidEncryptedContentRecoveryTried = true

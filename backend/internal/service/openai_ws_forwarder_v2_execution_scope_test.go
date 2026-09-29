@@ -199,3 +199,80 @@ func TestOpenAIGatewayService_Forward_WSv2_ExecutionScopeUsesOriginalIdentity(t 
 	_, boundC := stateStore.GetSessionTurnState(groupID, scopeC)
 	require.True(t, boundC, "客户端自带线程标识时，键必须与按原始报文算出的一致，不受账号 namespace 改写影响")
 }
+
+// A rotating cache key must not split the local WS turn-state namespace after
+// account selection has already established a stable, user-scoped route.
+func TestOpenAIGatewayService_Forward_WSv2_CacheRotationKeepsContinuityState(t *testing.T) {
+	for _, tc := range []struct{ explicitThread, clientCache bool }{{false, true}, {true, true}, {false, false}} {
+		t.Run(fmt.Sprintf("thread=%v/cache=%v", tc.explicitThread, tc.clientCache), func(t *testing.T) {
+			upgrader := websocket.Upgrader{CheckOrigin: func(r *http.Request) bool { return true }}
+			wsServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				header := http.Header{}
+				header.Set("x-codex-turn-state", "stable-turn-state")
+				conn, err := upgrader.Upgrade(w, r, header)
+				if err != nil {
+					t.Errorf("upgrade: %v", err)
+					return
+				}
+				defer conn.Close()
+				var payload map[string]any
+				if err := conn.ReadJSON(&payload); err != nil {
+					t.Errorf("read: %v", err)
+					return
+				}
+				if err := conn.WriteJSON(map[string]any{"type": "response.completed", "response": map[string]any{
+					"id": "resp_cache_rotation", "model": "gpt-5.1", "usage": map[string]any{"input_tokens": 2, "output_tokens": 1},
+				}}); err != nil {
+					t.Errorf("write: %v", err)
+				}
+			}))
+			defer wsServer.Close()
+			cfg := &config.Config{}
+			cfg.Security.URLAllowlist.AllowInsecureHTTP = true
+			cfg.Gateway.OpenAIWS.Enabled = true
+			cfg.Gateway.OpenAIWS.APIKeyEnabled = true
+			cfg.Gateway.OpenAIWS.ResponsesWebsocketsV2 = true
+			cfg.Gateway.OpenAIWS.MaxConnsPerAccount = 1
+			svc := &OpenAIGatewayService{cfg: cfg, httpUpstream: &httpUpstreamRecorder{}, cache: &stubGatewayCache{},
+				openaiWSResolver: NewOpenAIWSProtocolResolver(cfg), toolCorrector: NewCodexToolCorrector()}
+			group := int64(9)
+			account := &Account{ID: 456, Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Status: StatusActive,
+				Schedulable: true, Concurrency: 1,
+				Credentials: map[string]any{"api_key": "sk-test", "base_url": wsServer.URL},
+				Extra:       map[string]any{"responses_websockets_v2_enabled": true}}
+			var firstStateKey string
+			for turn := 0; turn < 2; turn++ {
+				c := cacheRotationContext(7)
+				c.Set("api_key", &APIKey{ID: 21, GroupID: &group})
+				if tc.explicitThread {
+					c.Request.Header.Set("thread-id", "thread-one")
+				}
+				body := []byte(fmt.Sprintf(`{"model":"gpt-5.1","stream":false,"prompt_cache_key":"cache-%d","input":[{"role":"user","content":"first user turn"}]}`, turn))
+				if !tc.clientCache {
+					body = []byte(`{"model":"gpt-5.1","stream":false,"input":[{"role":"user","content":"first user turn"}]}`)
+				}
+				hash := svc.GenerateSessionHash(c, body)
+				ctx := c.Request.Context()
+				require.NoError(t, svc.beginContinuity(ctx, &group, hash))
+				stateKey, _ := resolveOpenAIWSExecutionScope(c, body, 21)
+				if stateKey == "" {
+					stateKey = hash
+				}
+				stateKey = scopedOpenAISessionHash(ctx, stateKey)
+				if turn == 0 {
+					firstStateKey = stateKey
+				} else {
+					require.Equal(t, firstStateKey, stateKey)
+				}
+				result, err := svc.Forward(ctx, c, account, body)
+				require.NoError(t, err)
+				require.NotNil(t, result)
+				state, ok := svc.getOpenAIWSStateStore().GetSessionTurnState(group, stateKey)
+				require.True(t, ok, "HTTP-to-WS must use the same user-scoped state namespace as WS ingress")
+				require.Equal(t, "stable-turn-state", state)
+				_, legacyHit := svc.getOpenAIWSStateStore().GetSessionTurnState(group, hash)
+				require.False(t, legacyHit, "unscoped cache hashes must not receive continuity state")
+			}
+		})
+	}
+}

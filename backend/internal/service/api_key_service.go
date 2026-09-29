@@ -283,6 +283,7 @@ type RateLimitCacheInvalidator interface {
 }
 
 type APIKeyService struct {
+	accountPolicies           *UserAccountPolicyService
 	apiKeyRepo                APIKeyRepository
 	userRepo                  UserRepository
 	groupRepo                 GroupRepository
@@ -1184,4 +1185,12 @@ func (s *APIKeyService) UpdateRateLimitUsage(ctx context.Context, apiKeyID int64
 		return nil
 	}
 	return s.apiKeyRepo.IncrementRateLimitUsage(ctx, apiKeyID, cost)
+}
+
+// SetAccountPolicyService is called once by the middleware provider before routes are registered.
+func (s *APIKeyService) SetAccountPolicyService(policies *UserAccountPolicyService) {
+	s.accountPolicies = policies
+}
+func (s *APIKeyService) WithAccountPolicyContext(ctx context.Context, userID int64, groupID *int64) context.Context {
+	return WithUserAccountPolicy(ctx, s.accountPolicies, userID, groupID)
 }

@@ -35,6 +35,12 @@ func (s *GatewayService) ForwardAsResponses(
 	body []byte,
 	parsed *ParsedRequest,
 ) (*ForwardResult, error) {
+	if account != nil {
+		if err := CheckAccountAccess(ctx, account.ID, nil); err != nil {
+			return nil, err
+		}
+	}
+
 	startTime := time.Now()
 
 	normalizedBody, normalized, err := normalizeOpenAIResponsesLegacyIngress(body)

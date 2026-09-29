@@ -332,7 +332,14 @@ func (s *OpenAIGatewayService) ResolveGrokMediaVideoRequestAccount(
 	if cacheKey == "" {
 		return 0, fmt.Errorf("grok video request binding is invalid")
 	}
-	return s.cache.GetSessionAccountID(ctx, derefGroupID(groupID), cacheKey)
+	id, err := s.cache.GetSessionAccountID(ctx, derefGroupID(groupID), cacheKey)
+	if err != nil {
+		return 0, err
+	}
+	if err = CheckAccountAccess(ctx, id, groupID); err != nil {
+		return 0, err
+	}
+	return id, nil
 }
 
 // SelectGrokMediaVideoRequestAccount only admits the already authenticated
@@ -652,6 +659,12 @@ func (s *OpenAIGatewayService) ForwardGrokMedia(
 	body []byte,
 	contentType string,
 ) (*OpenAIForwardResult, error) {
+	if account != nil {
+		if err := CheckAccountAccess(ctx, account.ID, nil); err != nil {
+			return nil, err
+		}
+	}
+
 	startTime := time.Now()
 	if account == nil {
 		return nil, fmt.Errorf("grok account is required")

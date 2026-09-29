@@ -433,6 +433,14 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 	if writeClientMessage == nil {
 		return nil, errors.New("client websocket writer is nil")
 	}
+	if err := CheckAccountAccess(ctx, account.ID, nil); err != nil {
+		return nil, err
+	}
+	// The ingress replay path removes this ID only after proving completeness.
+	// Do not let the legacy body normalizer silently discard an unresolved chain.
+	if continuityEnabled(ctx) && strings.TrimSpace(gjson.GetBytes(payload, "previous_response_id").String()) != "" {
+		return nil, ErrOpenAIContextIncomplete
+	}
 	responseModelObserver := &upstreamResponseModelObserver{}
 
 	body, err := prepareOpenAIWSHTTPBridgeBody(account, payload)

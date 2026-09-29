@@ -1011,7 +1011,7 @@ func (s *GatewayService) resolvePlatform(ctx context.Context, groupID *int64, gr
 	return PlatformAnthropic, false, nil
 }
 
-func (s *GatewayService) listSchedulableAccounts(ctx context.Context, groupID *int64, platform string, hasForcePlatform bool) ([]Account, bool, error) {
+func (s *GatewayService) listSchedulableAccountsUnfiltered(ctx context.Context, groupID *int64, platform string, hasForcePlatform bool) ([]Account, bool, error) {
 	if s.schedulerSnapshot != nil {
 		accounts, useMixed, err := s.schedulerSnapshot.ListSchedulableAccounts(ctx, groupID, platform, hasForcePlatform)
 		if err == nil {
@@ -1512,6 +1512,9 @@ func (s *GatewayService) ReleaseAccountSession(ctx context.Context, account *Acc
 }
 
 func (s *GatewayService) getSchedulableAccount(ctx context.Context, accountID int64) (*Account, error) {
+	if err := CheckAccountAccess(ctx, accountID, nil); err != nil {
+		return nil, err
+	}
 	var (
 		account *Account
 		err     error
@@ -1559,6 +1562,11 @@ func (s *GatewayService) isAccountBlockedBySchedulingThreshold(ctx context.Conte
 }
 
 func (s *GatewayService) hydrateSelectedAccount(ctx context.Context, account *Account) (*Account, error) {
+	if account != nil {
+		if err := CheckAccountAccess(ctx, account.ID, nil); err != nil {
+			return nil, err
+		}
+	}
 	if account == nil || s.schedulerSnapshot == nil {
 		return account, nil
 	}
@@ -2661,4 +2669,13 @@ func (s *GatewayService) isModelSupportedByAccount(account *Account, requestedMo
 	}
 	// 其他平台使用账户的模型支持检查
 	return account.IsModelSupported(requestedModel)
+}
+
+func (s *GatewayService) listSchedulableAccounts(ctx context.Context, groupID *int64, platform string, hasForcePlatform bool) ([]Account, bool, error) {
+	accounts, mixed, err := s.listSchedulableAccountsUnfiltered(ctx, groupID, platform, hasForcePlatform)
+	if err != nil {
+		return nil, mixed, err
+	}
+	accounts, err = filterAccountsByUserPolicy(ctx, groupID, accounts)
+	return accounts, mixed, err
 }

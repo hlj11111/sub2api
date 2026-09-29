@@ -224,6 +224,9 @@ func (s *BatchImagePublicService) Submit(ctx context.Context, owner BatchImageOw
 					return nil, ErrBatchImageQueueFailed
 				}
 			}
+			if err := checkBatchImageJobAccountAccess(ctx, existing); err != nil {
+				return nil, err
+			}
 			return BatchImageJobToPublic(existing), nil
 		}
 		if !errors.Is(err, ErrBatchImageJobNotFound) {
@@ -350,7 +353,11 @@ func (s *BatchImagePublicService) Submit(ctx context.Context, owner BatchImageOw
 	hbCtx, hbCancel := context.WithCancel(ctx)
 	hbDone := make(chan struct{})
 	go s.runSubmitHeartbeat(hbCtx, job.BatchID, hbDone)
-	providerJob, err := provider.Submit(ctx, job, account, input)
+	var providerJob *BatchProviderJob
+	err = CheckAccountAccess(ctx, account.ID, owner.GroupID)
+	if err == nil {
+		providerJob, err = provider.Submit(ctx, job, account, input)
+	}
 	hbCancel()
 	<-hbDone
 	if err != nil {
@@ -533,7 +540,7 @@ func (s *BatchImagePublicService) hidePreUpstreamSubmitFailure(ctx context.Conte
 }
 
 func (s *BatchImagePublicService) Get(ctx context.Context, owner BatchImageOwner, batchID string) (*BatchImagePublicBatch, error) {
-	job, err := s.Repo.GetBatchImageJobByBatchIDForOwner(ctx, owner.UserID, owner.APIKeyID, batchID)
+	job, err := s.getAuthorizedBatchImageJob(ctx, owner, batchID)
 	if err != nil {
 		return nil, err
 	}
@@ -586,17 +593,23 @@ func (s *BatchImagePublicService) List(ctx context.Context, owner BatchImageOwne
 	}
 	data := make([]*BatchImagePublicBatch, 0, len(jobs))
 	for _, job := range jobs {
+		if err := checkBatchImageJobAccountAccess(ctx, job); err != nil {
+			if errors.Is(err, ErrAccountAccessDenied) {
+				continue
+			}
+			return nil, err
+		}
 		data = append(data, BatchImageJobToPublic(job))
 	}
 	return &BatchImagePublicListResponse{
 		Object:  "list",
 		Data:    data,
-		HasMore: len(data) == filter.Limit,
+		HasMore: len(jobs) == filter.Limit,
 	}, nil
 }
 
 func (s *BatchImagePublicService) MarkDownloaded(ctx context.Context, owner BatchImageOwner, batchID string) error {
-	job, err := s.Repo.GetBatchImageJobByBatchIDForOwner(ctx, owner.UserID, owner.APIKeyID, batchID)
+	job, err := s.getAuthorizedBatchImageJob(ctx, owner, batchID)
 	if err != nil {
 		return err
 	}
@@ -604,7 +617,7 @@ func (s *BatchImagePublicService) MarkDownloaded(ctx context.Context, owner Batc
 }
 
 func (s *BatchImagePublicService) DeleteRecord(ctx context.Context, owner BatchImageOwner, batchID string) error {
-	job, err := s.Repo.GetBatchImageJobByBatchIDForOwner(ctx, owner.UserID, owner.APIKeyID, batchID)
+	job, err := s.getAuthorizedBatchImageJob(ctx, owner, batchID)
 	if err != nil {
 		return err
 	}
@@ -633,6 +646,9 @@ func (s *BatchImagePublicService) ListModels(ctx context.Context, owner BatchIma
 		}
 		accounts, err := s.listCandidateAccounts(ctx, owner.GroupID, batchImageProviderPlatform(providerName))
 		if err != nil {
+			if errors.Is(err, ErrAccountAccessDenied) || errors.Is(err, ErrAllowedAccountsUnavailable) {
+				continue
+			}
 			return nil, err
 		}
 		for i := range accounts {
@@ -674,6 +690,9 @@ func (s *BatchImagePublicService) ListModels(ctx context.Context, owner BatchIma
 }
 
 func (s *BatchImagePublicService) ListItems(ctx context.Context, owner BatchImageOwner, batchID string, query BatchImageItemsQuery) (*BatchImagePublicItemsResponse, error) {
+	if _, err := s.getAuthorizedBatchImageJob(ctx, owner, batchID); err != nil {
+		return nil, err
+	}
 	filter := BatchImageItemFilter{Limit: query.Limit, Offset: parseBatchImageCursor(query.Cursor)}
 	switch strings.TrimSpace(query.Status) {
 	case "", "all":
@@ -705,7 +724,7 @@ func (s *BatchImagePublicService) ListItems(ctx context.Context, owner BatchImag
 }
 
 func (s *BatchImagePublicService) Cancel(ctx context.Context, owner BatchImageOwner, batchID string) (*BatchImagePublicBatch, error) {
-	job, err := s.Repo.GetBatchImageJobByBatchIDForOwner(ctx, owner.UserID, owner.APIKeyID, batchID)
+	job, err := s.getAuthorizedBatchImageJob(ctx, owner, batchID)
 	if err != nil {
 		return nil, err
 	}
@@ -731,6 +750,9 @@ func (s *BatchImagePublicService) Cancel(ctx context.Context, owner BatchImageOw
 		if err != nil {
 			return nil, ErrBatchImageCancelFailed
 		}
+		if err := CheckAccountAccess(ctx, account.ID, nil); err != nil {
+			return nil, err
+		}
 		if err := provider.Cancel(ctx, job, account); err != nil {
 			return nil, ErrBatchImageCancelFailed
 		}
@@ -745,7 +767,7 @@ func (s *BatchImagePublicService) Cancel(ctx context.Context, owner BatchImageOw
 				return nil, ErrBatchImageCancelFailed
 			}
 		}
-		updated, err := s.Repo.GetBatchImageJobByBatchIDForOwner(ctx, owner.UserID, owner.APIKeyID, batchID)
+		updated, err := s.getAuthorizedBatchImageJob(ctx, owner, batchID)
 		if err != nil {
 			return nil, err
 		}
@@ -762,7 +784,7 @@ func (s *BatchImagePublicService) Cancel(ctx context.Context, owner BatchImageOw
 		return nil, ErrBatchImageCancelFailed
 	}
 	s.invalidateAuthCache(ctx, owner.UserID)
-	updated, err := s.Repo.GetBatchImageJobByBatchIDForOwner(ctx, owner.UserID, owner.APIKeyID, batchID)
+	updated, err := s.getAuthorizedBatchImageJob(ctx, owner, batchID)
 	if err != nil {
 		return nil, err
 	}
@@ -935,6 +957,7 @@ func maxBatchImageReferenceImagesForModel(model string) int {
 
 func (s *BatchImagePublicService) selectProviderAndAccount(ctx context.Context, owner BatchImageOwner, requestedProvider, model string) (BatchImageProvider, *Account, error) {
 	providers := batchImageProviderSelectionOrder(requestedProvider)
+	var policyErr error
 	for _, providerName := range providers {
 		provider, ok := s.ProviderRegistry.Get(providerName)
 		if !ok || provider == nil {
@@ -942,6 +965,10 @@ func (s *BatchImagePublicService) selectProviderAndAccount(ctx context.Context, 
 		}
 		accounts, err := s.listCandidateAccounts(ctx, owner.GroupID, batchImageProviderPlatform(providerName))
 		if err != nil {
+			if errors.Is(err, ErrAccountAccessDenied) || errors.Is(err, ErrAllowedAccountsUnavailable) {
+				policyErr = err
+				continue
+			}
 			return nil, nil, err
 		}
 		// 与普通账号调度一致：priority 数值越小越优先，同优先级按 ID 排序。
@@ -961,6 +988,9 @@ func (s *BatchImagePublicService) selectProviderAndAccount(ctx context.Context, 
 			}
 		}
 	}
+	if policyErr != nil {
+		return nil, nil, policyErr
+	}
 	if requestedProvider != "" {
 		return nil, nil, ErrBatchImageNoAccountAvailable
 	}
@@ -971,10 +1001,17 @@ func (s *BatchImagePublicService) listCandidateAccounts(ctx context.Context, gro
 	if s.AccountRepo == nil {
 		return nil, ErrBatchImageNoAccountAvailable
 	}
+	var accounts []Account
+	var err error
 	if groupID != nil && *groupID > 0 {
-		return s.AccountRepo.ListSchedulableByGroupIDAndPlatform(ctx, *groupID, platform)
+		accounts, err = s.AccountRepo.ListSchedulableByGroupIDAndPlatform(ctx, *groupID, platform)
+	} else {
+		accounts, err = s.AccountRepo.ListSchedulableByPlatform(ctx, platform)
 	}
-	return s.AccountRepo.ListSchedulableByPlatform(ctx, platform)
+	if err != nil {
+		return nil, err
+	}
+	return filterAccountsByUserPolicy(ctx, groupID, accounts)
 }
 
 func (s *BatchImagePublicService) ensureGroupAllowsBatchImage(ctx context.Context, groupID *int64) error {
@@ -1325,6 +1362,9 @@ func batchImageGCSRef(provider, ref string) string {
 }
 
 func batchImageProviderSubmitPublicError(err error) error {
+	if IsAccountPolicyError(err) {
+		return err
+	}
 	reason := strings.TrimSpace(infraerrors.Reason(err))
 	switch reason {
 	case "VERTEX_MANAGED_GCS_BUCKET_MISSING":
@@ -1438,4 +1478,21 @@ func parseBatchImageCursor(cursor string) int {
 		return 0
 	}
 	return offset
+}
+
+func checkBatchImageJobAccountAccess(ctx context.Context, job *BatchImageJob) error {
+	if job == nil || job.AccountID == nil {
+		return nil
+	}
+	return CheckAccountAccess(ctx, *job.AccountID, nil)
+}
+func (s *BatchImagePublicService) getAuthorizedBatchImageJob(ctx context.Context, owner BatchImageOwner, batchID string) (*BatchImageJob, error) {
+	job, err := s.Repo.GetBatchImageJobByBatchIDForOwner(ctx, owner.UserID, owner.APIKeyID, batchID)
+	if err != nil {
+		return nil, err
+	}
+	if err = checkBatchImageJobAccountAccess(ctx, job); err != nil {
+		return nil, err
+	}
+	return job, nil
 }

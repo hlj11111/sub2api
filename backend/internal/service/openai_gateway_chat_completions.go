@@ -58,7 +58,23 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 	body []byte,
 	promptCacheKey string,
 	defaultMappedModel string,
-) (*OpenAIForwardResult, error) {
+) (forwardResult *OpenAIForwardResult, forwardErr error) {
+	if err := checkOpenAIContinuityBeforeForward(ctx, account); err != nil {
+		return nil, err
+	}
+
+	defer func() {
+		if forwardErr == nil && forwardResult != nil && forwardResult.UpstreamTerminalEvent != "response.failed" && forwardResult.UpstreamTerminalEvent != "response.incomplete" {
+			CompleteOpenAIContinuity(ctx, account)
+		}
+	}()
+
+	if account != nil {
+		if err := CheckAccountAccess(ctx, account.ID, nil); err != nil {
+			return nil, err
+		}
+	}
+
 	return s.forwardAsChatCompletions(ctx, c, account, body, promptCacheKey, defaultMappedModel, false)
 }
 
@@ -113,6 +129,9 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 	// /v1/chat/completions URL. Detect it before adaptive routing so adaptive
 	// accounts never forward the body unchanged to a Chat Completions endpoint.
 	isResponsesShape := !gjson.GetBytes(body, "messages").Exists() && gjson.GetBytes(body, "input").Exists()
+	if continuityEnabled(ctx) && strings.TrimSpace(gjson.GetBytes(body, "previous_response_id").String()) != "" && (!isResponsesShape || account.UsesNativeCNResponses() || shouldForwardOpenAIResponsesViaRawChatCompletions(account)) {
+		return nil, ErrOpenAIContextIncomplete
+	}
 
 	// OpenCode Go：按模型原生协议分流（与 inbound 协议正交）。
 	// 规则未命中一律兜底 Chat Completions，只有显式 Responses 才走下方转换链。

@@ -281,3 +281,35 @@ func testPassthroughIngressFreezesSubsequentTurnBeforeRequestPolicy(t *testing.T
 		t.Fatal("passthrough ingress did not exit")
 	}
 }
+
+func TestUserAccountPolicyPassthroughRevokedAfterWaiting(t *testing.T) {
+	group := int64(1)
+	account := passthroughLifecycleAccount()
+	repo := &policyTestRepo{policies: map[int64]map[int64]bool{group: {account.ID: true}}}
+	ctx := WithUserAccountPolicy(context.Background(), NewUserAccountPolicyService(repo, nil), 7, &group)
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	upstream := newStagedPassthroughConn()
+	upstream.Send("{\"type\":\"response.completed\",\"response\":{\"id\":\"resp_allowed\",\"model\":\"gpt-5.1\",\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}}")
+	hooks := &OpenAIWSIngressHooks{BeforeTurn: func(int) error { delete(repo.policies[group], account.ID); return nil }}
+	server, serverErr := startPassthroughHookRecordingServer(t, ctx, newPassthroughLifecycleService(passthroughLifecycleConfig(), upstream), account, hooks)
+	defer server.Close()
+	client := dialPassthroughLifecycleClient(t, server)
+	defer client.CloseNow()
+	requirePassthroughUpstreamWrite(t, upstream, time.Second)
+	_, err := readPassthroughLifecycleFrame(t, client, 3*time.Second)
+	require.NoError(t, err)
+	err = client.Write(ctx, coderws.MessageText, []byte("{\"type\":\"response.create\",\"model\":\"gpt-5.1\"}"))
+	require.NoError(t, err)
+	select {
+	case err = <-serverErr:
+		require.ErrorIs(t, err, ErrAccountAccessDenied)
+	case <-time.After(3 * time.Second):
+		t.Fatal("revoked session did not stop")
+	}
+	select {
+	case <-upstream.writes:
+		t.Fatal("revoked follow-up reached upstream")
+	default:
+	}
+}

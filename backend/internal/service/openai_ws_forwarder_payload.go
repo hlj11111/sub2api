@@ -826,6 +826,9 @@ func buildOpenAIWSCurrentTurnRetryPayload(
 			return nil, false, err
 		}
 	}
+	if openAIRequestHasNonPortableState(retryPayload) {
+		return nil, false, nil
+	}
 	coverage := AnalyzeToolCallOutputContextCoverageBytes(retryPayload)
 	if coverage.HasFunctionCallOutput && !coverage.ContextCoversAllCallIDs {
 		return nil, false, nil

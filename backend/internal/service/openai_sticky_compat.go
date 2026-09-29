@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"strings"
 	"sync/atomic"
@@ -120,6 +121,30 @@ func (s *OpenAIGatewayService) openAIStickyLegacyTTL(ttl time.Duration) time.Dur
 }
 
 func (s *OpenAIGatewayService) getStickySessionAccountID(ctx context.Context, groupID *int64, sessionHash string) (int64, error) {
+	if !continuityEnabled(ctx) || s.cache == nil || scopedOpenAISessionHash(ctx, sessionHash) == sessionHash {
+		return s.getLegacyStickySessionAccountID(ctx, groupID, sessionHash)
+	}
+	id, err := s.cache.GetSessionAccountID(ctx, derefGroupID(groupID), s.openAISessionCacheKey(scopedOpenAISessionHash(ctx, sessionHash)))
+	if err == nil && id > 0 {
+		return id, nil
+	}
+	if err != nil && !errors.Is(err, ErrStickySessionNotFound) {
+		return 0, err
+	}
+	id, err = s.getLegacyStickySessionAccountID(ctx, groupID, sessionHash)
+	if err != nil || id <= 0 {
+		return id, err
+	}
+	// Legacy keys were shared within a group. They supply only an account hint,
+	// and must never bypass current user authorization or account eligibility.
+	account, checkErr := s.getSchedulableAccount(ctx, id)
+	if checkErr != nil || account == nil || !account.IsActive() || !account.Schedulable || !s.openAIAccountMatchesSchedulingGroup(account, groupID) {
+		return 0, nil
+	}
+	return id, nil
+}
+
+func (s *OpenAIGatewayService) getLegacyStickySessionAccountID(ctx context.Context, groupID *int64, sessionHash string) (int64, error) {
 	if s == nil || s.cache == nil {
 		return 0, nil
 	}
@@ -152,6 +177,10 @@ func (s *OpenAIGatewayService) getStickySessionAccountID(ctx context.Context, gr
 }
 
 func (s *OpenAIGatewayService) setStickySessionAccountID(ctx context.Context, groupID *int64, sessionHash string, accountID int64, ttl time.Duration) error {
+	if continuityEnabled(ctx) {
+		return nil
+	} // Only successful, fenced turn completion may change the binding.
+
 	if s == nil || s.cache == nil || accountID <= 0 {
 		return nil
 	}
@@ -179,6 +208,13 @@ func (s *OpenAIGatewayService) setStickySessionAccountID(ctx context.Context, gr
 }
 
 func (s *OpenAIGatewayService) refreshStickySessionTTL(ctx context.Context, groupID *int64, sessionHash string, ttl time.Duration) error {
+	if continuityEnabled(ctx) {
+		if s.cache == nil {
+			return nil
+		}
+		return s.cache.RefreshSessionTTL(ctx, derefGroupID(groupID), s.openAISessionCacheKey(scopedOpenAISessionHash(ctx, sessionHash)), ttl)
+	}
+
 	if s == nil || s.cache == nil {
 		return nil
 	}
@@ -200,6 +236,10 @@ func (s *OpenAIGatewayService) refreshStickySessionTTL(ctx context.Context, grou
 }
 
 func (s *OpenAIGatewayService) deleteStickySessionAccountID(ctx context.Context, groupID *int64, sessionHash string) error {
+	if continuityEnabled(ctx) {
+		return nil
+	} // Only successful, fenced turn completion may change the binding.
+
 	if s == nil || s.cache == nil {
 		return nil
 	}

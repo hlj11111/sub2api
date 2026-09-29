@@ -404,7 +404,24 @@ export async function resetPlatformQuotaWindow(
   return data
 }
 
+export interface UserAccountPolicy {
+  mode: 'all' | 'allowlist'
+  account_ids: number[]
+}
+
+export async function getAccountPolicy(userId: number, groupId: number): Promise<UserAccountPolicy> {
+  const { data } = await apiClient.get<UserAccountPolicy>(`/admin/users/${userId}/groups/${groupId}/account-policy`)
+  return data
+}
+
+export async function setAccountPolicy(userId: number, groupId: number, policy: UserAccountPolicy): Promise<UserAccountPolicy> {
+  const { data } = await apiClient.put<UserAccountPolicy>(`/admin/users/${userId}/groups/${groupId}/account-policy`, policy)
+  return data
+}
+
 export const usersAPI = {
+  getAccountPolicy,
+  setAccountPolicy,
   list,
   getById,
   create,

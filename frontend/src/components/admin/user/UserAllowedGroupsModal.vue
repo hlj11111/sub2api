@@ -21,6 +21,7 @@
       </div>
 
       <div v-else class="space-y-6">
+        <UserAccountPolicyEditor :key="user.id" :user-id="user.id" :groups="accountPolicyGroups" />
         <!-- 专属分组区域 -->
         <div v-if="exclusiveGroups.length > 0">
           <div class="mb-3 flex items-center gap-2">
@@ -206,6 +207,7 @@ import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
 import { adminAPI } from '@/api/admin'
 import type { AdminUser, Group, GroupPlatform } from '@/types'
+import UserAccountPolicyEditor from './UserAccountPolicyEditor.vue'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import PlatformIcon from '@/components/common/PlatformIcon.vue'
 
@@ -225,6 +227,7 @@ const { t } = useI18n()
 const appStore = useAppStore()
 
 const groups = ref<Group[]>([])
+const accountPolicyGroups = ref<Group[]>([])
 const groupConfigs = ref<GroupRateConfig[]>([])
 const originalGroupRates = ref<Record<number, number>>({}) // 记录原始专属倍率，用于检测删除
 const loading = ref(false)
@@ -253,6 +256,7 @@ const load = async () => {
   loading.value = true
   try {
     const res = await adminAPI.groups.list(1, 1000)
+    accountPolicyGroups.value = res.items
     // 只显示标准类型且活跃的分组
     groups.value = res.items.filter((g) => g.subscription_type === 'standard' && g.status === 'active')
 

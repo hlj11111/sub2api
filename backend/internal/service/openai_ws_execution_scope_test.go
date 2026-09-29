@@ -235,7 +235,7 @@ func TestResolveOpenAIWSExecutionScope(t *testing.T) {
 	require.NotEqual(t, bySession, scopeOf(sessionOnly, sessionMemory, 11), "只有会话标识时记忆整理也单独成道")
 
 	byCacheKey := scopeOf(nil, []byte(`{"type":"response.create","prompt_cache_key":"cache-1","input":"hi"}`), 11)
-	require.Len(t, byCacheKey, 16)
+	require.Empty(t, byCacheKey, "a cache hint is not a socket preemption identity")
 
 	require.Equal(t, "", scopeOf(nil, bodyFirst, 11), "只有请求内容时不得产生执行作用域")
 	nilScope, nilThread := resolveOpenAIWSExecutionScope(nil, bodyFirst, 11)

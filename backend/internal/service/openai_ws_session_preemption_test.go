@@ -215,6 +215,7 @@ func TestOpenAIWSIngressSessionPreemptionSurvivesNestedForwardCleanup(t *testing
 	newContext := func() *gin.Context {
 		c, _ := gin.CreateTestContext(httptest.NewRecorder())
 		c.Request = httptest.NewRequest(http.MethodGet, "/v1/responses", nil)
+		c.Request.Header.Set("session-id", "session-1")
 		c.Set("api_key", &APIKey{ID: 11, GroupID: &groupID})
 		return c
 	}
@@ -253,6 +254,7 @@ func TestOpenAIWSIngressSessionPreemptionRespectsResolvedMode(t *testing.T) {
 	newContext := func() *gin.Context {
 		c, _ := gin.CreateTestContext(httptest.NewRecorder())
 		c.Request = httptest.NewRequest(http.MethodGet, "/v1/responses", nil)
+		c.Request.Header.Set("session-id", "session-1")
 		c.Set("api_key", &APIKey{ID: 11, GroupID: &groupID})
 		return c
 	}
@@ -533,4 +535,24 @@ func TestOpenAIWSIngressSessionPreemptionClaimsRemoteOwnerByExecutionScope(t *te
 	_, legacyKeyed := stub.owners[stub.key(7, openAIWSSessionPreemptCacheHash(11, legacy))]
 	require.True(t, scoped, "remote owner must be claimed under the execution scope")
 	require.False(t, legacyKeyed, "remote owner must not be claimed under the legacy session hash")
+}
+
+func TestOpenAIWSIngressSessionPreemptionDoesNotUseCacheHints(t *testing.T) {
+	svc := &OpenAIGatewayService{}
+	account := &Account{ID: 1, Platform: PlatformOpenAI, Type: AccountTypeOAuth}
+	firstCtx, firstCleanup, armed := svc.BeginOpenAIWSIngressSessionPreemption(
+		context.Background(), cacheRotationContext(7), account,
+		[]byte(`{"type":"response.create","prompt_cache_key":"shared-cache","input":"first conversation"}`),
+	)
+	require.False(t, armed)
+	defer firstCleanup()
+	for _, key := range []string{"shared-cache", "rotated-cache"} {
+		_, cleanup, armed := svc.BeginOpenAIWSIngressSessionPreemption(
+			context.Background(), cacheRotationContext(7), account,
+			[]byte(fmt.Sprintf(`{"type":"response.create","prompt_cache_key":%q,"input":"another conversation"}`, key)),
+		)
+		require.False(t, armed, "cache hints must never cancel another conversation")
+		cleanup()
+		require.NoError(t, firstCtx.Err())
+	}
 }

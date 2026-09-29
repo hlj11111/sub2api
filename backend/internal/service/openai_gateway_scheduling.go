@@ -18,6 +18,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
+	"github.com/tidwall/sjson"
 )
 
 const (
@@ -143,9 +144,12 @@ func (s *OpenAIGatewayService) GenerateExplicitSessionHash(c *gin.Context, body 
 	return currentHash
 }
 
-// GenerateSessionHash generates a sticky-session hash for OpenAI requests.
+// GenerateSessionHash preserves the legacy cache identity returned to callers.
+// OpenAI account routing independently prefers explicit conversation/thread IDs
+// and then an anchored, model-independent content seed. A changing prompt cache
+// key must not replace an available stable routing identity.
 //
-// Priority:
+// Legacy returned cache identity priority (routing is resolved separately):
 //  1. Header: session-id / session_id
 //  2. Header: conversation_id
 //  3. Header: x-session-affinity / x-session-id / x-opencode-session (OpenCode)
@@ -161,13 +165,29 @@ func (s *OpenAIGatewayService) GenerateExplicitSessionHash(c *gin.Context, body 
 // sticky seed with the client-requested model so switching models does not
 // inherit a stale account binding (grok2api affinityKey pattern).
 func (s *OpenAIGatewayService) GenerateSessionHash(c *gin.Context, body []byte) string {
+	attachOpenAIContinuity(c)
+	if c != nil && c.Request != nil && len(body) > 0 {
+		if st := continuityState(c.Request.Context()); st != nil {
+			st.mu.Lock()
+			st.migrationUnsafe = openAIRequestHasNonPortableState(body)
+			st.mu.Unlock()
+		}
+	}
+
 	if c == nil {
 		return ""
 	}
 
 	sessionID := explicitOpenAIRequestSessionID(c, body)
 	if sessionID == "" && len(body) > 0 {
-		sessionID = deriveOpenAIContentSessionSeed(body)
+		payload := body
+		if !isGrokRequestContext(c) {
+			payload = []byte(openAIRequestPayloadView(body).Raw)
+		}
+		sessionID = deriveOpenAIContentSessionSeed(payload)
+	}
+	if sessionID == "" && !isGrokRequestContext(c) {
+		sessionID = explicitOpenAIRoutingSessionID(c, body)
 	}
 	if sessionID == "" {
 		return ""
@@ -178,8 +198,58 @@ func (s *OpenAIGatewayService) GenerateSessionHash(c *gin.Context, body []byte) 
 	}
 
 	currentHash, legacyHash := deriveOpenAISessionHashes(sessionID)
+	if !isGrokRequestContext(c) && c.Request != nil {
+		if st := continuityState(c.Request.Context()); st != nil {
+			routingHash := openAIContinuityRoutingHash(c, body, st)
+			if routingHash != "" {
+				st.routingHashes.Store(currentHash, routingHash)
+				slog.Debug("session_routing_identity", "separate_cache_identity", routingHash != currentHash)
+			}
+		}
+	}
 	attachOpenAILegacySessionHashToGin(c, legacyHash)
 	return currentHash
+}
+
+// explicitOpenAIRoutingSessionID excludes prompt_cache_key: it is a cache
+// hint, not evidence of a conversation boundary. Do not use request/turn IDs.
+func explicitOpenAIRoutingSessionID(c *gin.Context, body []byte) string {
+	if id := explicitOpenAIHeaderSessionID(c); id != "" {
+		return id
+	}
+	payload := openAIRequestPayloadView(body)
+	if thread := resolveOpenAIWSClientThreadID(c, []byte(payload.Raw)); thread != "" {
+		return "openai-thread:" + thread
+	}
+	for _, path := range []string{"client_metadata.session_id", "client_metadata.conversation_id", "metadata.session_id", "metadata.conversation_id"} {
+		if value := payload.Get(path); value.Type == gjson.String {
+			if id := strings.TrimSpace(value.String()); id != "" {
+				return id
+			}
+		}
+	}
+	return ""
+}
+
+func openAIContinuityRoutingHash(c *gin.Context, body []byte, st *openAIContinuityState) string {
+	if id := explicitOpenAIRoutingSessionID(c, body); id != "" {
+		return DeriveSessionHashFromSeed(id)
+	}
+	// Incremental WS turns need not repeat the initial user message. Pin their
+	// routing identity for this connection, independently of rotating cache keys.
+	st.mu.Lock()
+	pinned := st.wsRoutingHash
+	st.mu.Unlock()
+	if pinned != "" {
+		return pinned
+	}
+	payload := []byte(openAIRequestPayloadView(body).Raw)
+	if normalized, err := sjson.DeleteBytes(payload, "model"); err == nil {
+		if seed := deriveOpenAIAnchoredContentSessionSeed(normalized); seed != "" {
+			return DeriveSessionHashFromSeed(seed)
+		}
+	}
+	return ""
 }
 
 // grokStickyAffinitySeed scopes sticky routing by model without changing the
@@ -199,23 +269,36 @@ func grokStickyAffinitySeed(sessionID string, body []byte) string {
 	return "grok-affinity:v1:" + model + ":" + sessionID
 }
 
-// GenerateSessionHashWithFallback 先按常规信号生成会话哈希；
-// 当未携带 session_id/conversation_id/prompt_cache_key 时，使用 fallbackSeed 生成稳定哈希。
-// 该方法用于 WS ingress，避免会话信号缺失时发生跨账号漂移。
+// GenerateSessionHashWithFallback initializes WS account routing once. The
+// connection fallback is used only without a stable ID or anchored context;
+// subsequent incremental turns reuse this route even when cache keys rotate.
 func (s *OpenAIGatewayService) GenerateSessionHashWithFallback(c *gin.Context, body []byte, fallbackSeed string) string {
 	sessionHash := s.GenerateSessionHash(c, body)
-	if sessionHash != "" {
+	if sessionHash == "" {
+		var legacyHash string
+		sessionHash, legacyHash = deriveOpenAISessionHashes(fallbackSeed)
+		attachOpenAILegacySessionHashToGin(c, legacyHash)
+	}
+	if sessionHash == "" || c == nil || c.Request == nil || isGrokRequestContext(c) {
 		return sessionHash
 	}
-
-	seed := strings.TrimSpace(fallbackSeed)
-	if seed == "" {
-		return ""
+	if st := continuityState(c.Request.Context()); st != nil {
+		routingHash := openAIContinuityRoutingHash(c, body, st)
+		if routingHash == "" {
+			routingHash = DeriveSessionHashFromSeed(fallbackSeed)
+		}
+		if routingHash == "" {
+			routingHash = sessionHash
+		}
+		st.mu.Lock()
+		if st.wsRoutingHash == "" {
+			st.wsRoutingHash = routingHash
+		}
+		routingHash = st.wsRoutingHash
+		st.mu.Unlock()
+		st.routingHashes.Store(sessionHash, routingHash)
 	}
-
-	currentHash, legacyHash := deriveOpenAISessionHashes(seed)
-	attachOpenAILegacySessionHashToGin(c, legacyHash)
-	return currentHash
+	return sessionHash
 }
 
 func resolveOpenAIUpstreamOriginator(c *gin.Context, isOfficialClient bool) string {
@@ -1488,7 +1571,7 @@ func (s *OpenAIGatewayService) selectAccountWithLoadAwareness(ctx context.Contex
 	return nil, ErrNoAvailableAccounts
 }
 
-func (s *OpenAIGatewayService) listSchedulableAccounts(ctx context.Context, groupID *int64, platform string) ([]Account, error) {
+func (s *OpenAIGatewayService) listSchedulableAccountsUnfiltered(ctx context.Context, groupID *int64, platform string) ([]Account, error) {
 	platform = NormalizeOpenAICompatiblePlatform(platform)
 	if s.schedulerSnapshot != nil {
 		accounts, _, err := s.schedulerSnapshot.ListSchedulableAccounts(ctx, groupID, platform, false)
@@ -1597,6 +1680,9 @@ func (s *OpenAIGatewayService) recheckSelectedOpenAIAccountFromDB(ctx context.Co
 }
 
 func (s *OpenAIGatewayService) recheckSelectedOpenAIAccountFromDBBeforeProfit(ctx context.Context, account *Account, groupID *int64, platform string, requestedModel string, requireCompact bool, requiredCapability OpenAIEndpointCapability) *Account {
+	if account != nil && CheckAccountAccess(ctx, account.ID, groupID) != nil {
+		return nil
+	}
 	if account == nil {
 		return nil
 	}
@@ -1656,6 +1742,9 @@ func (s *OpenAIGatewayService) openAIAccountMatchesSchedulingGroup(account *Acco
 }
 
 func (s *OpenAIGatewayService) getSchedulableAccount(ctx context.Context, accountID int64) (*Account, error) {
+	if err := CheckAccountAccess(ctx, accountID, nil); err != nil {
+		return nil, err
+	}
 	var (
 		account *Account
 		err     error
@@ -1712,6 +1801,11 @@ func (s *OpenAIGatewayService) isOpenAIAccountBlockedBySchedulingThreshold(ctx c
 }
 
 func (s *OpenAIGatewayService) hydrateSelectedAccount(ctx context.Context, account *Account) (*Account, error) {
+	if account != nil {
+		if err := CheckAccountAccess(ctx, account.ID, nil); err != nil {
+			return nil, err
+		}
+	}
 	if account == nil || s.schedulerSnapshot == nil {
 		return account, nil
 	}
@@ -1766,4 +1860,12 @@ func (s *OpenAIGatewayService) schedulingConfig() config.GatewaySchedulingConfig
 		LoadBatchEnabled:         true,
 		SlotCleanupInterval:      30 * time.Second,
 	}
+}
+
+func (s *OpenAIGatewayService) listSchedulableAccounts(ctx context.Context, groupID *int64, platform string) ([]Account, error) {
+	accounts, err := s.listSchedulableAccountsUnfiltered(ctx, groupID, platform)
+	if err != nil {
+		return nil, err
+	}
+	return filterAccountsByUserPolicy(ctx, groupID, accounts)
 }

@@ -1059,6 +1059,12 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 						return payload, nil, err
 					}
 				}
+				if err := CheckAccountAccess(ctx, account.ID, nil); err != nil {
+					return payload, nil, err
+				}
+				if err := checkOpenAIContinuityBeforeForward(ctx, account); err != nil {
+					return payload, nil, err
+				}
 				if hooks != nil && hooks.MapRequestModel != nil {
 					upstreamModel, err := hooks.MapRequestModel(turnNo, requestModelForThisFrame)
 					if err != nil {
@@ -1135,6 +1141,12 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 		},
 	}
 	upstreamFirstMessageSent := false
+	if err := CheckAccountAccess(ctx, account.ID, nil); err != nil {
+		return err
+	}
+	if err := checkOpenAIContinuityBeforeForward(ctx, account); err != nil {
+		return err
+	}
 	firstWriteCtx, cancelFirstWrite := context.WithTimeout(ctx, s.openAIWSWriteTimeout())
 	firstWriteErr := relayUpstreamFrameConn.WriteFrame(firstWriteCtx, coderws.MessageText, firstClientMessage)
 	cancelFirstWrite()
@@ -1198,6 +1210,11 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 				)
 			},
 			OnTurnComplete: func(turn openaiwsv2.RelayTurnResult) {
+				// Passthrough responses also need durable ownership for reconnects.
+				s.bindHTTPResponseAccount(ctx, c, account, turn.RequestID)
+				if turn.TerminalEventType != "response.failed" && turn.TerminalEventType != "response.incomplete" {
+					CompleteOpenAIContinuity(ctx, account)
+				}
 				turnNo := int(completedTurns.Add(1))
 				if hooks != nil && hooks.TurnStarted != nil && !turn.StartedAt.IsZero() {
 					hooks.TurnStarted(turnNo, turn.StartedAt)

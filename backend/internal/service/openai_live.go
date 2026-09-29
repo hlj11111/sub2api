@@ -439,6 +439,9 @@ func (s *OpenAIGatewayService) liveSidebandHeaders(
 }
 
 func (s *OpenAIGatewayService) dialLiveSideband(ctx context.Context, record *LiveCallRecord) (liveFrameConn, error) {
+	if err := CheckAccountAccess(ctx, record.AccountID, nil); err != nil {
+		return nil, err
+	}
 	account, err := s.accountRepo.GetByID(ctx, record.AccountID)
 	if err != nil {
 		return nil, err
@@ -481,6 +484,9 @@ func (s *OpenAIGatewayService) GetLiveCallForIdentity(
 		record.UserID != identity.UserID ||
 		record.GroupID != liveGroupID(identity.GroupID) {
 		return nil, ErrLiveIdentityMismatch
+	}
+	if err := CheckAccountAccess(ctx, record.AccountID, identity.GroupID); err != nil {
+		return nil, err
 	}
 	if record.Controller == LiveControllerClosed {
 		return nil, ErrLiveCallNotFound
@@ -530,6 +536,13 @@ func (s *OpenAIGatewayService) ProxyLiveSideband(
 			if readErr != nil {
 				errCh <- readErr
 				return
+			}
+			eventType := gjson.GetBytes(payload, "type").String()
+			if eventType == "response.create" || eventType == "input_audio_buffer.commit" || eventType == "session.update" {
+				if err := CheckAccountAccess(proxyCtx, record.AccountID, nil); err != nil {
+					errCh <- err
+					return
+				}
 			}
 			if writeErr := upstream.WriteFrame(proxyCtx, messageType, payload); writeErr != nil {
 				errCh <- writeErr

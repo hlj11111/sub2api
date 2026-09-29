@@ -27,6 +27,7 @@ type UserWithConcurrency struct {
 
 // UserHandler handles admin user management
 type UserHandler struct {
+	accountPolicies       *service.UserAccountPolicyService
 	adminService          service.AdminService
 	concurrencyService    *service.ConcurrencyService
 	userPlatformQuotaRepo service.UserPlatformQuotaRepository // T13 admin quota view
@@ -55,6 +56,12 @@ func NewUserHandler(
 		userService:           userService,
 		settingService:        settingService,
 	}
+}
+
+func ProvideUserHandler(adminService service.AdminService, concurrencyService *service.ConcurrencyService, quotaRepo service.UserPlatformQuotaRepository, billingCache service.BillingCache, totp *service.TotpService, users *service.UserService, settings *service.SettingService, policies *service.UserAccountPolicyService) *UserHandler {
+	h := NewUserHandler(adminService, concurrencyService, quotaRepo, billingCache, totp, users, settings)
+	h.accountPolicies = policies
+	return h
 }
 
 // CreateUserRequest represents admin create user request

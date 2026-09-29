@@ -53,7 +53,8 @@ func normalizeOpenAIResponsesLegacyIngress(body []byte) ([]byte, bool, error) {
 			if !hasNativeInput {
 				request["input"] = legacy.input
 				applyLegacyResponsesTopLevelFields(request, legacy)
-				delete(request, "previous_response_id")
+				// Translating messages cannot prove the referenced history is complete.
+				// Preserve the ID so account routing and upstream validation stay authoritative.
 			}
 		}
 		// messages is not a Responses field. When native input is present but the

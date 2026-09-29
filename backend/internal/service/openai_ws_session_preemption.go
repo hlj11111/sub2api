@@ -114,6 +114,9 @@ func (s *OpenAIGatewayService) BeginOpenAIWSIngressSessionPreemptionWithClient(
 		// without any declared identity are not registered at all.
 		preemptScope, preemptThreadID = resolveOpenAIWSExecutionScope(c, firstClientMessage, preemptAPIKeyID)
 	}
+	if continuityEnabled(ctx) {
+		preemptScope = scopedOpenAISessionHash(ctx, preemptScope)
+	}
 	preemptCtx, cleanup, armed, preemptedPrevious := s.beginOpenAIWSSessionPreemptContext(
 		ctx,
 		account,

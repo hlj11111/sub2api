@@ -32,6 +32,12 @@ var supportedGrokVoiceHTTPEndpoints = map[string]struct{}{
 // The response is intentionally passed through because TTS returns audio bytes
 // while STT returns JSON and xAI may add format-specific headers.
 func (s *OpenAIGatewayService) ForwardGrokVoice(ctx context.Context, c *gin.Context, account *Account, endpoint string, body []byte, contentType string) (*OpenAIForwardResult, error) {
+	if account != nil {
+		if err := CheckAccountAccess(ctx, account.ID, nil); err != nil {
+			return nil, err
+		}
+	}
+
 	if s == nil || account == nil {
 		return nil, fmt.Errorf("grok voice service/account is required")
 	}
@@ -127,6 +133,9 @@ func (s *OpenAIGatewayService) ProxyGrokRealtime(ctx context.Context, c *gin.Con
 	if s == nil || client == nil || account == nil {
 		return false, fmt.Errorf("realtime service, client, and account are required")
 	}
+	if err := CheckAccountAccess(ctx, account.ID, nil); err != nil {
+		return false, err
+	}
 	if account.Platform != PlatformGrok {
 		return false, fmt.Errorf("account platform %s is not supported for grok realtime", account.Platform)
 	}
@@ -138,7 +147,10 @@ func (s *OpenAIGatewayService) ProxyGrokRealtime(ctx context.Context, c *gin.Con
 	return s.ProxyGrokRealtimeConn(ctx, c, client, upstream)
 }
 
-type GrokRealtimeUpstream struct{ conn openAIWSClientConn }
+type GrokRealtimeUpstream struct {
+	conn      openAIWSClientConn
+	accountID int64
+}
 
 // GrokRealtimeDialError preserves an HTTP status returned before WebSocket
 // upgrade so handlers can apply the normal Grok account policy.
@@ -160,6 +172,9 @@ func (u *GrokRealtimeUpstream) Close() error {
 func (s *OpenAIGatewayService) OpenGrokRealtime(ctx context.Context, account *Account, token, model string) (*GrokRealtimeUpstream, error) {
 	if s == nil || account == nil || account.Platform != PlatformGrok {
 		return nil, fmt.Errorf("grok realtime account is required")
+	}
+	if err := CheckAccountAccess(ctx, account.ID, nil); err != nil {
+		return nil, err
 	}
 	base, err := buildGrokVoiceURL(account, s.cfg, "realtime")
 	if err != nil {
@@ -186,7 +201,7 @@ func (s *OpenAIGatewayService) OpenGrokRealtime(ctx context.Context, account *Ac
 	if err != nil {
 		return nil, &GrokRealtimeDialError{StatusCode: status, Err: err}
 	}
-	return &GrokRealtimeUpstream{conn: conn}, nil
+	return &GrokRealtimeUpstream{conn: conn, accountID: account.ID}, nil
 }
 
 // HandleGrokRealtimeUpstreamError applies the shared Grok account policy to a
@@ -240,6 +255,13 @@ func (s *OpenAIGatewayService) ProxyGrokRealtimeConn(ctx context.Context, c *gin
 			}
 			if grokRealtimeEventHasAudio(msg) {
 				audioObserved.Store(true)
+			}
+			eventType := gjson.GetBytes(msg, "type").String()
+			if upstream.accountID > 0 && (eventType == "response.create" || eventType == "input_audio_buffer.commit" || eventType == "session.update") {
+				if err := CheckAccountAccess(ctx, upstream.accountID, nil); err != nil {
+					errCh <- err
+					return
+				}
 			}
 			var raw json.RawMessage
 			if unmarshalErr := json.Unmarshal(msg, &raw); unmarshalErr != nil {

@@ -353,6 +353,9 @@ func (s *BatchImageDownloadService) getCompletedJob(ctx context.Context, owner B
 	if err != nil {
 		return nil, err
 	}
+	if err := checkBatchImageJobAccountAccess(ctx, job); err != nil {
+		return nil, err
+	}
 	switch job.Status {
 	case BatchImageJobStatusCompleted:
 		return job, nil
@@ -373,6 +376,9 @@ func (s *BatchImageDownloadService) providerAndAccount(ctx context.Context, job 
 	}
 	if job.AccountID == nil || *job.AccountID <= 0 {
 		return nil, nil, ErrBatchImageMissingAccountID
+	}
+	if err := checkBatchImageJobAccountAccess(ctx, job); err != nil {
+		return nil, nil, err
 	}
 	account, err := s.AccountResolver.ResolveBatchImageAccount(ctx, *job.AccountID)
 	if err != nil {

@@ -131,6 +131,21 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 	if executionScope = strings.TrimSpace(executionScope); executionScope != "" {
 		sessionHash = executionScope
 	}
+	// Match native WS ingress: apply the stable route and user isolation only
+	// to local state, leaving the upstream prompt cache identity unchanged.
+	if continuityEnabled(ctx) {
+		sessionHash = scopedOpenAISessionHash(ctx, sessionHash)
+		if executionScope == "" {
+			// Forwarding may inject a cache key after selection, so use the
+			// already-established route rather than deriving it from that key.
+			st := continuityState(ctx)
+			st.mu.Lock()
+			if st.hash != "" {
+				sessionHash = st.hash
+			}
+			st.mu.Unlock()
+		}
+	}
 	if turnState == "" && stateStore != nil && sessionHash != "" {
 		if savedTurnState, ok := stateStore.GetSessionTurnState(groupID, sessionHash); ok {
 			turnState = savedTurnState

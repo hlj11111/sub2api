@@ -67,6 +67,10 @@ func newOpenAIWSPassthroughHandlerHarness(t *testing.T, upstreamURL string) *ope
 	cfg.Gateway.OpenAIWS.ReadTimeoutSeconds = 3
 	cfg.Gateway.OpenAIWS.WriteTimeoutSeconds = 3
 	cfg.Gateway.OpenAIWS.IngressInterTurnIdleTimeoutSeconds = 3
+	// This harness uses Redis session leases, so provide a valid admission wait
+	// budget just as the production configuration validator requires.
+	cfg.Gateway.Scheduling.StickySessionWaitTimeout = time.Second
+	cfg.Gateway.Scheduling.StickySessionMaxWaiting = 3
 
 	accountRepo := &openAIWSUsageHandlerAccountRepoStub{account: account}
 	usageRepo := &openAIWSUsageHandlerUsageLogRepoStub{created: make(chan *service.UsageLog, 2)}

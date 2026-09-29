@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"regexp"
@@ -41,6 +42,18 @@ var selectionModelRateLimitedPattern = regexp.MustCompile(`(?:model_rate_limited
 func classifySelectionFailureError(err error, fallback noAccountErrorClassification) noAccountErrorClassification {
 	if err == nil {
 		return fallback
+	}
+	if errors.Is(err, service.ErrAllowedAccountsUnavailable) {
+		return noAccountErrorClassification{Status: 503, ErrType: "allowed_accounts_unavailable", Message: service.ErrAllowedAccountsUnavailable.Message}
+	}
+	if errors.Is(err, service.ErrAccountPolicyUnavailable) {
+		return noAccountErrorClassification{Status: 503, ErrType: "account_policy_unavailable", Message: service.ErrAccountPolicyUnavailable.Message}
+	}
+	if errors.Is(err, service.ErrAccountAccessDenied) {
+		return noAccountErrorClassification{Status: 403, ErrType: "account_access_denied", Message: service.ErrAccountAccessDenied.Message}
+	}
+	if errors.Is(err, service.ErrOpenAIContinuityUnavailable) {
+		return noAccountErrorClassification{Status: 503, ErrType: "session_account_unavailable", Message: service.ErrOpenAIContinuityUnavailable.Message}
 	}
 	// A 404 model_not_found fallback is authoritative and must not be downgraded
 	// to a rate-limit verdict. classifyNoAccountError only reaches it through

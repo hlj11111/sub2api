@@ -43,6 +43,9 @@ func (r *BatchImageAccountRepositoryResolver) ResolveBatchImageAccount(ctx conte
 	if r == nil || r.Repo == nil {
 		return nil, ErrAccountNotFound
 	}
+	if err := CheckAccountAccess(ctx, accountID, nil); err != nil {
+		return nil, err
+	}
 	return r.Repo.GetByID(ctx, accountID)
 }
 
