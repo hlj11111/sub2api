@@ -808,6 +808,10 @@ const rankingRef = ref<InstanceType<typeof UserTokenRanking> | null>(null)
 
 const switchTab = (tab: DetailTab) => {
   activeTab.value = tab
+  if (tab !== 'usage' && filters.value.session_id) {
+    filters.value = { ...filters.value, session_id: undefined }
+    applyFilters()
+  }
   if (tab === 'errors' && errRows.value.length === 0) loadAdminErrors()
   if (tab === 'ranking') rankingMounted.value = true
 }
