@@ -1335,9 +1335,7 @@ func logOpsRecoveredUpstream(c *gin.Context, ops *service.OpsService, finalStatu
 	entry.IsCountTokens = isCountTokensRequest(c)
 	entry.CreatedAt = time.Now()
 	entry.ErrorMessage = "Recovered upstream error"
-	if _, local := classifyOpsLocalGatewayError(streamErr.ErrType, streamErr.Code); local {
-		// The final local rejection retains its own source; attempts remain attached.
-	} else if lastStage == string(service.GatewayFailureStageAccountAuth) {
+	if lastStage == string(service.GatewayFailureStageAccountAuth) {
 		entry.ErrorPhase = string(service.GatewayFailureStageAccountAuth)
 		entry.ErrorMessage = "Recovered account authentication failure"
 	} else if lastStatus > 0 {
@@ -1616,7 +1614,9 @@ func applyOpsStreamErrorSnapshot(entry *service.OpsInsertErrorLogInput, streamEr
 			break
 		}
 	}
-	if lastStage == string(service.GatewayFailureStageAccountAuth) {
+	if _, local := classifyOpsLocalGatewayError(streamErr.ErrType, streamErr.Code); local {
+		// Keep final local attribution while retaining preceding upstream attempts.
+	} else if lastStage == string(service.GatewayFailureStageAccountAuth) {
 		entry.ErrorPhase = string(service.GatewayFailureStageAccountAuth)
 		entry.ErrorOwner = "provider"
 		entry.ErrorSource = "gateway"

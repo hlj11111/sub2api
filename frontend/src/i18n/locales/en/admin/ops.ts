@@ -314,6 +314,16 @@ export default {
       },
       // Error Detail Modal
       errorDetail: {
+        failureOrigin: 'Error source',
+        failureCategory: 'Error category',
+        originLocal: 'Local gateway',
+        originUpstream: 'Upstream service',
+        failureTypes: {
+          local_validation_error: 'Context or resource validation',
+          local_permission_error: 'Account permission check',
+          local_state_error: 'Session storage or lease',
+          local_routing_error: 'Routing or recovery limit'
+        },
         title: 'Error Detail',
         titleWithId: 'Error #{id}',
         noErrorSelected: 'No error selected.',

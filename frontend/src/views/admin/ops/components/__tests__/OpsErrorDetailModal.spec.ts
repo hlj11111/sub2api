@@ -34,6 +34,24 @@ describe('OpsErrorDetailModal', () => {
     mocks.listRequestErrorUpstreamErrors.mockResolvedValue({ items: [] })
   })
 
+  it('shows local rejection as the outcome and keeps preceding upstream diagnostics', async () => {
+    mocks.getRequestErrorDetail.mockResolvedValue({
+      id: 1, phase: 'request', type: 'local_validation_error', error_owner: 'gateway',
+      error_source: 'gateway', status_code: 409, platform: 'openai', model: 'gpt-5.1',
+      message: '本地历史校验未通过', error_body: '{"error":{"code":"LOCAL_SESSION_ENCRYPTED_HISTORY"}}',
+      upstream_error_message: 'previous provider failure', upstream_status_code: 503
+    })
+    const wrapper = shallowMount(OpsErrorDetailModal, {
+      props: { show: true, errorId: 1, errorType: 'request' },
+      global: { stubs: { BaseDialog: { template: '<div><slot /></div>' }, Icon: true } }
+    })
+    await flushPromises()
+    expect(wrapper.find('[title="本地历史校验未通过"]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('admin.ops.errorDetail.originLocal')
+    expect(wrapper.text()).toContain('admin.ops.errorDetail.failureTypes.local_validation_error')
+    expect(wrapper.text()).toContain('previous provider failure')
+  })
+
   it('prioritizes upstream root cause and deduplicates diagnostic payloads', async () => {
     mocks.getRequestErrorDetail.mockResolvedValue({
       id: 1,

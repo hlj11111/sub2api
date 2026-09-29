@@ -169,8 +169,13 @@ func (s *OpenAIGatewayService) GenerateSessionHash(c *gin.Context, body []byte) 
 	if c != nil && c.Request != nil && len(body) > 0 {
 		if st := continuityState(c.Request.Context()); st != nil {
 			st.mu.Lock()
-			st.nonPortableReason = openAIRequestNonPortableReason(body)
-			st.migrationUnsafe = st.nonPortableReason != ""
+			// HTTP recovery keeps ingress facts fixed across account transforms and
+			// lineage hash lookups; a sanitized retry must not make later retries
+			// accidentally forward the original ciphertext again.
+			if st.handlerDone == nil {
+				st.nonPortableReason = openAIRequestNonPortableReason(body)
+				st.migrationUnsafe = st.nonPortableReason != ""
+			}
 			st.mu.Unlock()
 		}
 	}

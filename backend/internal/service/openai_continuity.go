@@ -64,6 +64,7 @@ type openAIContinuityState struct {
 	canDropReasoning     bool
 	migrationPending     bool
 	backupAccountID      int64
+	recoveryDeadline     time.Time
 }
 
 func continuityState(ctx context.Context) *openAIContinuityState {
@@ -178,7 +179,13 @@ func CompleteOpenAIContinuity(ctx context.Context, account *Account) {
 	if st.cache != nil {
 		ok, err := st.cache.CommitContinuityBinding(ctx, st.groupID, st.gateway.openAISessionCacheKey(st.hash), st.owner, account.ID, st.gateway.openAIWSSessionStickyTTL())
 		if err != nil || !ok {
-			slog.Warn("session_binding_commit_rejected", "account_id", account.ID, "group_id", st.groupID, "error", err)
+			reason := "lease_mismatch_or_expired"
+			if err != nil {
+				reason = "binding_store_error"
+			}
+			logger.FromContext(ctx).Warn("session_binding_commit_rejected",
+				zap.Int64("account_id", account.ID), zap.Int64("group_id", st.groupID),
+				zap.String("session_hash", st.hash), zap.String("reason", reason), zap.Error(err))
 			return
 		}
 		if !st.stopped {
@@ -266,6 +273,9 @@ func (s *OpenAIGatewayService) selectContinuityAccount(ctx context.Context, req 
 	if err := CheckAccountAccess(ctx, accountID, req.GroupID); err != nil {
 		if !errors.Is(err, ErrAccountAccessDenied) || (continuityState(ctx).migrationUnsafe && !allowOpenAIBalancedMigration(ctx)) {
 			return nil, decision, true, err
+		}
+		if st := continuityState(ctx); st != nil && st.balanced && !allowOpenAIBalancedMigration(ctx) {
+			return nil, decision, true, ErrOpenAIRecoveryExhausted
 		}
 		// A portable request may migrate after revocation, but only through the
 		// normal picker, which applies the latest policy to every candidate.
@@ -553,6 +563,16 @@ func (s *OpenAIGatewayService) AcquireOpenAIWebSocketAccountSlot(ctx context.Con
 // failure policies retain precedence; authentication/payload errors never opt in.
 func PrepareOpenAIContinuityRecovery(ctx context.Context, account *Account, failure *UpstreamFailoverError) {
 	st := continuityState(ctx)
+	if st != nil && st.balanced && failure != nil {
+		st.mu.Lock()
+		if st.recoveryDeadline.IsZero() {
+			st.recoveryDeadline = time.Now().Add(openAIBalancedRecoveryWindow)
+		}
+		if failure.SameAccountRetryDeadline.IsZero() || failure.SameAccountRetryDeadline.After(st.recoveryDeadline) {
+			failure.SameAccountRetryDeadline = st.recoveryDeadline
+		}
+		st.mu.Unlock()
+	}
 	if st == nil || !st.enabled || !st.explicitSession || st.hash == "" || account == nil || account.Platform != PlatformOpenAI || account.IsPoolMode() || failure == nil ||
 		failure.RetryableOnSameAccount || !failure.ShouldRetryNextAccount() || failure.IsCredentialFailure() || failure.Reason != "" {
 		return

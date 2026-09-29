@@ -314,6 +314,16 @@ export default {
       },
       // Error Detail Modal
       errorDetail: {
+        failureOrigin: '错误来源',
+        failureCategory: '错误分类',
+        originLocal: '本地网关',
+        originUpstream: '上游服务',
+        failureTypes: {
+          local_validation_error: '上下文或资源校验未通过',
+          local_permission_error: '账号权限校验未通过',
+          local_state_error: '会话存储或占用异常',
+          local_routing_error: '无可用渠道或恢复次数用完'
+        },
         title: '错误详情',
         titleWithId: '错误 #{id}',
         noErrorSelected: '未选择错误。',

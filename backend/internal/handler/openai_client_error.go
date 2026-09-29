@@ -4,6 +4,7 @@ package handler
 // and administrator-defined passthrough messages are not translated or guessed.
 func openAIClientError(errType, code, message string) (string, string, string) {
 	translations := map[string][2]string{
+		"Upstream request timed out, please retry later": {"UPSTREAM_TIMEOUT", "上游响应超时，请稍后在当前会话重试"},
 		"Invalid API key":                                                        {"LOCAL_API_KEY_INVALID", "本地认证失败：API Key 无效"},
 		"User context not found":                                                 {"LOCAL_USER_CONTEXT_MISSING", "本地认证状态异常，请重新验证 API Key"},
 		"Failed to read request body":                                            {"LOCAL_REQUEST_READ_FAILED", "本地请求校验未通过：读取请求内容失败"},

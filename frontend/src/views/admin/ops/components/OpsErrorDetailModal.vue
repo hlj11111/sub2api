@@ -85,6 +85,16 @@
         </div>
 
         <div class="rounded-xl bg-gray-50 p-4 dark:bg-dark-900">
+          <div class="text-xs font-bold uppercase tracking-wider text-gray-400">{{ t('admin.ops.errorDetail.failureOrigin') }}</div>
+          <div class="mt-1 text-sm font-medium text-gray-900 dark:text-white">{{ failureOrigin }}</div>
+        </div>
+
+        <div class="rounded-xl bg-gray-50 p-4 dark:bg-dark-900">
+          <div class="text-xs font-bold uppercase tracking-wider text-gray-400">{{ t('admin.ops.errorDetail.failureCategory') }}</div>
+          <div class="mt-1 text-sm font-medium text-gray-900 dark:text-white">{{ failureCategory }}</div>
+        </div>
+
+        <div class="rounded-xl bg-gray-50 p-4 dark:bg-dark-900">
           <div class="text-xs font-bold uppercase tracking-wider text-gray-400">{{ t('admin.ops.errorDetail.status') }}</div>
           <div class="mt-1">
             <span :class="['inline-flex items-center rounded-lg px-2 py-1 text-xs font-black ring-1 ring-inset shadow-sm', statusClass]">
@@ -259,12 +269,29 @@ const showUpstreamList = computed(() => props.errorType === 'request')
 
 const requestId = computed(() => detail.value?.request_id || detail.value?.client_request_id || '')
 
+const failureOrigin = computed(() => {
+  const current = detail.value
+  if (!current) return '—'
+  if (current.type?.startsWith('local_') || current.error_owner === 'gateway') return t('admin.ops.errorDetail.originLocal')
+  if (current.error_owner === 'provider') return t('admin.ops.errorDetail.originUpstream')
+  return current.error_source || '—'
+})
+const failureCategory = computed(() => {
+  const kind = detail.value?.type || ''
+  const localKinds = ['local_validation_error', 'local_permission_error', 'local_state_error', 'local_routing_error']
+  return localKinds.includes(kind) ? t(`admin.ops.errorDetail.failureTypes.${kind}`) : kind || '—'
+})
+
+
 type DiagnosticPayloadKey = 'client' | 'upstream_message' | 'upstream_detail' | 'upstream_events'
 
 const rootCauseMessage = computed(() => {
   const current = detail.value
   if (!current) return ''
-  for (const candidate of [current.upstream_error_message, current.upstream_error_detail, current.message, current.error_body]) {
+  const candidates = current.type?.startsWith('local_')
+    ? [current.message, current.error_body, current.upstream_error_message, current.upstream_error_detail]
+    : [current.upstream_error_message, current.upstream_error_detail, current.message, current.error_body]
+  for (const candidate of candidates) {
     const value = meaningfulPayload(candidate)
     if (value) return value
   }

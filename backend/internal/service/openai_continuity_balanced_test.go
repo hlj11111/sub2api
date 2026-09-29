@@ -72,6 +72,10 @@ func TestBalancedOriginalKeepsCipherAndBackupCannotFanOut(t *testing.T) {
 	backup, err := prepareOpenAIBalancedForward(ctx, &Account{ID: 2}, []byte(balancedTranscript))
 	require.NoError(t, err)
 	require.NotContains(t, string(backup), "private-cipher")
+	svc.GenerateSessionHash(c, backup) // forwarding/lineage code can recompute the hash
+	repeated, err := prepareOpenAIBalancedForward(ctx, &Account{ID: 2}, []byte(balancedTranscript))
+	require.NoError(t, err)
+	require.NotContains(t, string(repeated), "private-cipher", "same-backup retry must remain sanitized")
 	require.ErrorIs(t, OpenAIContinuityMigrationError(ctx), ErrOpenAIRecoveryExhausted)
 	_, err = prepareOpenAIBalancedForward(ctx, &Account{ID: 3}, []byte(balancedTranscript))
 	require.ErrorIs(t, err, ErrOpenAIRecoveryExhausted)
