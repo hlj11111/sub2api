@@ -6,10 +6,12 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"sync/atomic"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
 	"github.com/cespare/xxhash/v2"
 	"github.com/gin-gonic/gin"
 )
@@ -130,6 +132,24 @@ func (s *OpenAIGatewayService) getStickySessionAccountID(ctx context.Context, gr
 	}
 	if err != nil && !errors.Is(err, ErrStickySessionNotFound) {
 		return 0, err
+	}
+	if history, ok := s.cache.(OpenAIContinuityHistory); ok {
+		st := continuityState(ctx)
+		st.mu.Lock()
+		sessionID := st.clientSessionID
+		st.mu.Unlock()
+		userID, _ := ctx.Value(ctxkey.UserID).(int64)
+		// Only explicit headers already persisted by usage logging can recover
+		// pre-upgrade sessions. Never correlate content-derived or changed IDs.
+		if userID > 0 && sessionID != "" && scopedOpenAISessionHash(ctx, sessionHash) == fmt.Sprintf("u%d:%s", userID, DeriveSessionHashFromSeed(sessionID)) {
+			id, err := history.RecoverOpenAIContinuityAccount(ctx, userID, derefGroupID(groupID), sessionID)
+			if err == nil && id > 0 {
+				slog.Info("session_binding_recovery_candidate", "user_id", userID, "group_id", derefGroupID(groupID), "account_id", id)
+			}
+			return id, err
+		}
+		// Unscoped legacy keys are shared across users and cannot prove ownership.
+		return 0, ErrStickySessionNotFound
 	}
 	id, err = s.getLegacyStickySessionAccountID(ctx, groupID, sessionHash)
 	if err != nil || id <= 0 {

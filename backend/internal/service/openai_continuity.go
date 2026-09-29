@@ -31,6 +31,13 @@ type OpenAIContinuityCache interface {
 	ReleaseContinuityLease(context.Context, int64, string, string) error
 	CheckContinuityBinding(context.Context, int64, string, string, int64) (bool, error)
 }
+
+// OpenAIContinuityHistory supplies a legacy recovery candidate. It does not
+// authorize the account or commit a binding; only a successful turn can do that.
+type OpenAIContinuityHistory interface {
+	RecoverOpenAIContinuityAccount(context.Context, int64, int64, string) (int64, error)
+}
+
 type openAIContinuityKey struct{}
 type openAIContinuityState struct {
 	mu                   sync.Mutex
@@ -38,6 +45,7 @@ type openAIContinuityState struct {
 	wsRoutingHash        string   // connection identity for incremental WS turns
 	enabled              bool
 	explicitSession      bool
+	clientSessionID      string // history lookup only; never logged
 	retryAccountID       int64 // request-local retry target; never commits a session binding
 	migrationUnsafe      bool
 	nonPortableReason    string // fixed diagnostic category; never request content
@@ -61,7 +69,10 @@ func attachOpenAIContinuity(c *gin.Context) {
 	if c == nil || c.Request == nil || continuityState(c.Request.Context()) != nil {
 		return
 	}
-	c.Request = c.Request.WithContext(context.WithValue(c.Request.Context(), openAIContinuityKey{}, &openAIContinuityState{explicitSession: extractClientSessionID(c.Request.Header) != ""}))
+	sessionID := extractClientSessionID(c.Request.Header)
+	c.Request = c.Request.WithContext(context.WithValue(c.Request.Context(), openAIContinuityKey{}, &openAIContinuityState{
+		explicitSession: sessionID != "", clientSessionID: sessionID,
+	}))
 }
 func continuityEnabled(ctx context.Context) bool {
 	st := continuityState(ctx)
