@@ -75,9 +75,9 @@ func TestResponsesBalancedMissingBindingDoesNotFanOut(t *testing.T) {
 	c.Request.Header.Set("session_id", "missing-binding")
 	h.Responses(c)
 	require.Equal(t, []int64{1}, upstream.accounts, "one recovered attempt, no speculative chain")
-	require.Equal(t, http.StatusServiceUnavailable, rec.Code)
-	require.Equal(t, "LOCAL_SESSION_RECOVERY_EXHAUSTED", gjson.GetBytes(rec.Body.Bytes(), "error.code").String())
-	require.Equal(t, "local_routing_error", gjson.GetBytes(rec.Body.Bytes(), "error.type").String())
+	require.Equal(t, http.StatusBadGateway, rec.Code)
+	require.Equal(t, "UPSTREAM_REQUEST_FAILED", gjson.GetBytes(rec.Body.Bytes(), "error.code").String())
+	require.Equal(t, "upstream_error", gjson.GetBytes(rec.Body.Bytes(), "error.type").String())
 }
 
 func TestContinuityErrorsAreChineseTypedAndPreservedInSSE(t *testing.T) {

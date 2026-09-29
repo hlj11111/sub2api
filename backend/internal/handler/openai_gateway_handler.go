@@ -924,6 +924,12 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 						}
 					}
 					if migrationErr := service.OpenAIContinuityMigrationError(c.Request.Context()); migrationErr != nil {
+						if errors.Is(migrationErr, service.ErrOpenAIRecoveryExhausted) {
+							// The backup actually failed upstream. Preserve that error instead
+							// of attributing it to our local attempt budget.
+							h.handleFailoverExhausted(c, failoverErr, streamStarted)
+							return
+						}
 						reqLog.Warn("openai.session_recovery_blocked", zap.Int64("account_id", account.ID), zap.Int("retry_count", sameAccountRetryCount[account.ID]), zap.Error(migrationErr))
 						h.handleContinuitySelectionError(c, migrationErr, streamStarted)
 						return
