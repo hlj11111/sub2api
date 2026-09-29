@@ -17,12 +17,22 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func persistentContinuityUser(t *testing.T) *service.User {
+	t.Helper()
+	user := mustCreateUser(t, testEntClient(t), &service.User{Email: uuid.NewString() + "@example.com"})
+	t.Cleanup(func() {
+		_, err := integrationDB.ExecContext(context.Background(), `DELETE FROM users WHERE id=$1`, user.ID)
+		require.NoError(t, err)
+	})
+	return user
+}
+
 func persistentContinuityFixture(t *testing.T) (*persistentGatewayCache, *miniredis.Miniredis, string) {
 	t.Helper()
 	mr := miniredis.RunT(t)
 	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
 	t.Cleanup(func() { _ = rdb.Close() })
-	user := mustCreateUser(t, testEntClient(t), &service.User{Email: uuid.NewString() + "@example.com"})
+	user := persistentContinuityUser(t)
 	key := fmt.Sprintf("openai:u%d:%s", user.ID, service.DeriveSessionHashFromSeed(uuid.NewString()))
 	cache, ok := NewPersistentGatewayCache(rdb, integrationDB).(*persistentGatewayCache)
 	require.True(t, ok)
@@ -171,11 +181,17 @@ func TestPersistentContinuityLegacyHistoryIsolation(t *testing.T) {
 	ctx := context.Background()
 	client := testEntClient(t)
 	repo := newUsageLogRepositoryWithSQL(client, integrationDB)
-	first := mustCreateUser(t, client, &service.User{Email: uuid.NewString() + "@example.com"})
-	other := mustCreateUser(t, client, &service.User{Email: uuid.NewString() + "@example.com"})
+	first := persistentContinuityUser(t)
+	other := persistentContinuityUser(t)
 	group := mustCreateGroup(t, client, &service.Group{Name: uuid.NewString()})
 	accountA := mustCreateAccount(t, client, &service.Account{Name: uuid.NewString()})
 	accountB := mustCreateAccount(t, client, &service.Account{Name: uuid.NewString()})
+	t.Cleanup(func() {
+		_, err := integrationDB.ExecContext(context.Background(), `DELETE FROM accounts WHERE id IN ($1,$2)`, accountA.ID, accountB.ID)
+		require.NoError(t, err)
+		_, err = integrationDB.ExecContext(context.Background(), `DELETE FROM groups WHERE id=$1`, group.ID)
+		require.NoError(t, err)
+	})
 	session := uuid.NewString()
 	now := time.Now().UTC()
 	for _, record := range []struct {
@@ -216,7 +232,7 @@ func TestPersistentContinuityLegacyHistoryIsolation(t *testing.T) {
 func TestPersistentContinuityBindingNamespaceIsolation(t *testing.T) {
 	c, _, firstKey := persistentContinuityFixture(t)
 	ctx := context.Background()
-	other := mustCreateUser(t, testEntClient(t), &service.User{Email: uuid.NewString() + "@example.com"})
+	other := persistentContinuityUser(t)
 	_, hash, _ := persistentOpenAISession(firstKey)
 	otherKey := fmt.Sprintf("openai:u%d:%s", other.ID, hash)
 	for i, scope := range []struct {
