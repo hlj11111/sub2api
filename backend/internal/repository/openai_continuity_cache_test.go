@@ -69,7 +69,7 @@ func TestOpenAIContinuityExpiredLeaseCannotCommit(t *testing.T) {
 func TestOpenAIContinuityConcurrentFirstTurnClaimsOneOwner(t *testing.T) {
 	server := miniredis.RunT(t)
 	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 	cache := &gatewayCache{rdb: client}
 	results := make(chan bool, 16)
 	for range 16 {

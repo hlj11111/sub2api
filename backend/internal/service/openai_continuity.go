@@ -301,7 +301,9 @@ func (s *OpenAIGatewayService) waitForContinuityRecovery(ctx context.Context, ac
 func scopedOpenAISessionHash(ctx context.Context, hash string) string {
 	if st := continuityState(ctx); st != nil {
 		if routing, ok := st.routingHashes.Load(hash); ok {
-			hash = routing.(string)
+			if routingHash, valid := routing.(string); valid {
+				hash = routingHash
+			}
 		}
 	}
 	userID, _ := ctx.Value(ctxkey.UserID).(int64)

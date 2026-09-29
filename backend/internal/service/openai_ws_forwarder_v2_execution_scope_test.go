@@ -214,7 +214,7 @@ func TestOpenAIGatewayService_Forward_WSv2_CacheRotationKeepsContinuityState(t *
 					t.Errorf("upgrade: %v", err)
 					return
 				}
-				defer conn.Close()
+				defer func() { _ = conn.Close() }()
 				var payload map[string]any
 				if err := conn.ReadJSON(&payload); err != nil {
 					t.Errorf("read: %v", err)

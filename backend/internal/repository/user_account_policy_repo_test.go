@@ -13,7 +13,7 @@ import (
 func TestUserAccountPolicyRepositoryEmptyMarkerAndMissingSubject(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	repo := &userAccountPolicyRepository{db: db}
 	mock.ExpectQuery("SELECT").WithArgs(int64(1), int64(2)).WillReturnRows(sqlmock.NewRows([]string{"exists", "restricted", "ids"}).AddRow(true, true, "{}"))
 	p, err := repo.Get(context.Background(), 1, 2)
@@ -28,7 +28,7 @@ func TestUserAccountPolicyRepositoryEmptyMarkerAndMissingSubject(t *testing.T) {
 func TestUserAccountPolicyRepositoryRejectsOtherGroupAtomically(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	repo := &userAccountPolicyRepository{db: db}
 	mock.ExpectBegin()
 	mock.ExpectQuery("SELECT id FROM users").WithArgs(int64(1)).WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(1))

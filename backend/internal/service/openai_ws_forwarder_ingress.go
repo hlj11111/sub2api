@@ -647,7 +647,6 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			bridgePayloadBytes := currentBridgePayload.payloadBytes
 			toolOutputCoverage := AnalyzeToolCallOutputContextCoverageBytes(currentBridgePayload.payloadRaw)
 			if continuityEnabled(ctx) && currentBridgePayload.previousResponseID != "" && (!bridgeHistoryComplete || bridgeLastResponseID == "" || currentBridgePayload.previousResponseID != bridgeLastResponseID) {
-				bridgeHistoryComplete = false
 				return ErrOpenAIContextIncomplete
 			}
 			needsBridgeReplay := currentBridgePayload.previousResponseID != "" ||

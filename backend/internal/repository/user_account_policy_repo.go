@@ -100,7 +100,7 @@ func (r *userAccountPolicyRepository) Filter(ctx context.Context, userID int64, 
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	ids := make([]int64, 0, len(accountIDs))
 	for rows.Next() {
 		var id int64

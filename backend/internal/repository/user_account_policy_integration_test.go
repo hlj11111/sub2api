@@ -19,7 +19,7 @@ func TestUserAccountPolicyPostgres(t *testing.T) {
 	}
 	db, err := sql.Open("postgres", dsn)
 	require.NoError(t, err)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	db.SetMaxOpenConns(1)
 	_, err = db.Exec(`CREATE TEMP TABLE users(id BIGINT PRIMARY KEY, deleted_at TIMESTAMPTZ);
  CREATE TEMP TABLE groups(id BIGINT PRIMARY KEY, deleted_at TIMESTAMPTZ);

@@ -295,7 +295,7 @@ func TestUserAccountPolicyPassthroughRevokedAfterWaiting(t *testing.T) {
 	server, serverErr := startPassthroughHookRecordingServer(t, ctx, newPassthroughLifecycleService(passthroughLifecycleConfig(), upstream), account, hooks)
 	defer server.Close()
 	client := dialPassthroughLifecycleClient(t, server)
-	defer client.CloseNow()
+	defer func() { _ = client.CloseNow() }()
 	requirePassthroughUpstreamWrite(t, upstream, time.Second)
 	_, err := readPassthroughLifecycleFrame(t, client, 3*time.Second)
 	require.NoError(t, err)
