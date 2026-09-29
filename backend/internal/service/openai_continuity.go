@@ -392,11 +392,11 @@ func checkOpenAIContinuityBeforeForward(ctx context.Context, account *Account) e
 
 // openAIContextIncomplete records the rejecting branch at WARN so it is visible
 // with production INFO logging. Only hashes, booleans and fixed categories are
-// logged, never opaque IDs or request content. All callers retain the same public
-// error and routing policy.
+// logged, never opaque IDs or request content. The logged code matches the
+// detailed client-facing classification while retaining the base error cause.
 func openAIContextIncomplete(ctx context.Context, reason string, accountID int64) error {
 	stateReason := ""
-	fields := []zap.Field{zap.String("reason", reason), zap.String("error_code", ErrOpenAIContextIncomplete.Reason)}
+	fields := []zap.Field{zap.String("reason", reason)}
 	if accountID > 0 {
 		fields = append(fields, zap.Int64("account_id", accountID))
 	}
@@ -412,8 +412,10 @@ func openAIContextIncomplete(ctx context.Context, reason string, accountID int64
 		)
 		st.mu.Unlock()
 	}
+	err := continuityContextError(reason, stateReason)
+	fields = append(fields, zap.String("error_code", infraerrors.FromError(err).Reason))
 	logger.FromContext(ctx).Warn("openai.session_context_incomplete", fields...)
-	return continuityContextError(reason, stateReason)
+	return err
 }
 
 func openAIRequestHasNonPortableState(body []byte) bool {

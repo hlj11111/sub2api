@@ -4,7 +4,11 @@ package handler
 // and administrator-defined passthrough messages are not translated or guessed.
 func openAIClientError(errType, code, message string) (string, string, string) {
 	translations := map[string][2]string{
-		"Upstream request timed out, please retry later": {"UPSTREAM_TIMEOUT", "上游响应超时，请稍后在当前会话重试"},
+		"previous_response_id must be a response.id (resp_*), not a message id":                                                                                                      {"LOCAL_RESPONSE_ID_INVALID", "本地参数校验未通过：previous_response_id 必须是 resp_* 响应 ID，不能使用消息 ID"},
+		"previous_response_id is not available for this user":                                                                                                                        {"LOCAL_RESPONSE_ACCESS_DENIED", "本地权限校验未通过：当前用户无权使用此 previous_response_id"},
+		"function_call_output requires call_id on HTTP requests; continuation via previous_response_id is only supported on Responses WebSocket v2":                                  {"LOCAL_TOOL_CALL_ID_MISSING", "本地工具校验未通过：HTTP 工具结果必须提供 call_id；仅 Responses WebSocket v2 支持通过 previous_response_id 接续"},
+		"function_call_output requires item_reference ids matching each call_id on HTTP requests; continuation via previous_response_id is only supported on Responses WebSocket v2": {"LOCAL_TOOL_REFERENCE_MISSING", "本地工具校验未通过：HTTP 工具结果缺少与 call_id 匹配的历史引用；请补发完整工具调用和结果"},
+		"Upstream request timed out, please retry later":                                                                                                                             {"UPSTREAM_TIMEOUT", "上游响应超时，请稍后在当前会话重试"},
 		"Invalid API key":                                                        {"LOCAL_API_KEY_INVALID", "本地认证失败：API Key 无效"},
 		"User context not found":                                                 {"LOCAL_USER_CONTEXT_MISSING", "本地认证状态异常，请重新验证 API Key"},
 		"Failed to read request body":                                            {"LOCAL_REQUEST_READ_FAILED", "本地请求校验未通过：读取请求内容失败"},

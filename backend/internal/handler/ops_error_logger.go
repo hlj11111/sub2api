@@ -2538,11 +2538,11 @@ func classifyOpsLocalGatewayError(errType, code string) (string, bool) {
 		return "", false
 	}
 	switch {
-	case strings.HasPrefix(code, "LOCAL_API_KEY"):
+	case strings.HasPrefix(code, "LOCAL_API_KEY"), code == "LOCAL_RESPONSE_ACCESS_DENIED":
 		return "auth", true
 	case strings.HasPrefix(code, "LOCAL_NO_AVAILABLE"), code == "LOCAL_ALL_ACCOUNTS_COOLDOWN", code == "LOCAL_COMPACT_UNSUPPORTED":
 		return "routing", true
-	case strings.HasPrefix(code, "LOCAL_REQUEST"):
+	case strings.HasPrefix(code, "LOCAL_REQUEST"), strings.HasPrefix(code, "LOCAL_TOOL_"), code == "LOCAL_RESPONSE_ID_INVALID":
 		return "request", true
 	default:
 		return "internal", true

@@ -27,7 +27,7 @@ func continuityContextError(reason, state string) error {
 	default:
 		switch state {
 		case "unmatched_tool_output":
-			code, message = "LOCAL_SESSION_TOOL_CONTEXT_MISSING", "本地工具历史校验未通过：工具结果缺少对应调用，无法安全切换渠道；请补发完整工具调用和结果"
+			code, message = "LOCAL_SESSION_TOOL_CONTEXT_MISSING", "本地工具历史校验未通过：工具调用与结果未完整配对，无法安全切换渠道；请补发完整工具调用和结果"
 		case "encrypted_content":
 			code, message = "LOCAL_SESSION_ENCRYPTED_HISTORY", "本地历史校验未通过：请求含加密历史，且无法确认可独立重放的消息和工具结果；原渠道不可用时不能安全切换"
 		case "compaction":

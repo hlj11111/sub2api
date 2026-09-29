@@ -288,7 +288,7 @@ type DiagnosticPayloadKey = 'client' | 'upstream_message' | 'upstream_detail' | 
 const rootCauseMessage = computed(() => {
   const current = detail.value
   if (!current) return ''
-  const candidates = current.type?.startsWith('local_')
+  const candidates = current.type?.startsWith('local_') || current.error_owner === 'gateway'
     ? [current.message, current.error_body, current.upstream_error_message, current.upstream_error_detail]
     : [current.upstream_error_message, current.upstream_error_detail, current.message, current.error_body]
   for (const candidate of candidates) {
