@@ -108,7 +108,7 @@ func (c *persistentGatewayCache) CommitContinuityBinding(ctx context.Context, gr
 	}
 	// DB reads are authoritative even if this mirror write races with a later
 	// commit. A Redis failure cannot undo an already committed successful turn.
-	_ = c.gatewayCache.SetSessionAccountID(ctx, group, key, accountID, ttl)
+	_ = c.SetSessionAccountID(ctx, group, key, accountID, ttl)
 	return true, nil
 }
 

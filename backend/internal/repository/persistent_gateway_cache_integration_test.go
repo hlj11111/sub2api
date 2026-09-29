@@ -54,7 +54,7 @@ func TestPersistentContinuitySurvivesTTLAndStaleRedis(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, ok)
 	// A delayed mirror write cannot supersede the newer durable owner.
-	require.NoError(t, c.gatewayCache.SetSessionAccountID(ctx, 0, key, 101, time.Hour))
+	require.NoError(t, c.SetSessionAccountID(ctx, 0, key, 101, time.Hour))
 	id, err = c.GetSessionAccountID(ctx, 0, key)
 	require.NoError(t, err)
 	require.EqualValues(t, 202, id)
@@ -158,7 +158,7 @@ func TestPersistentContinuityConcurrentRecoveryAndDBFailure(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, closedDB.Close())
 	c.db = closedDB
-	require.NoError(t, c.gatewayCache.SetSessionAccountID(ctx, 0, key, 999, time.Hour))
+	require.NoError(t, c.SetSessionAccountID(ctx, 0, key, 999, time.Hour))
 	_, err = c.GetSessionAccountID(ctx, 0, key)
 	require.Error(t, err, "DB failure must not trust a potentially stale Redis owner")
 	ok, err := c.AcquireContinuityLease(ctx, 0, key, "outage", time.Minute)
