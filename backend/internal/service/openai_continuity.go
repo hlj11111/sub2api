@@ -12,9 +12,11 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/tidwall/gjson"
+	"go.uber.org/zap"
 )
 
 var ErrOpenAIContinuityUnavailable = infraerrors.ServiceUnavailable("SESSION_ACCOUNT_UNAVAILABLE", "The session account is temporarily unavailable; retry this conversation later")
@@ -38,6 +40,7 @@ type openAIContinuityState struct {
 	explicitSession      bool
 	retryAccountID       int64 // request-local retry target; never commits a session binding
 	migrationUnsafe      bool
+	nonPortableReason    string // fixed diagnostic category; never request content
 	previousResponseID   string
 	waitMigrationClaimed bool
 	initialized          bool
@@ -209,11 +212,11 @@ func (s *OpenAIGatewayService) selectContinuityAccount(ctx context.Context, req 
 		if ownerID > 0 {
 			return nil, decision, true, ErrOpenAIContinuityUnavailable
 		}
-		return nil, decision, true, ErrOpenAIContextIncomplete
+		return nil, decision, true, openAIContextIncomplete(ctx, "previous_response_owner_missing", 0)
 	}
 	if req.SessionHash == "" {
 		if st := continuityState(ctx); st != nil && st.migrationUnsafe {
-			return nil, decision, true, ErrOpenAIContextIncomplete
+			return nil, decision, true, openAIContextIncomplete(ctx, "session_identity_missing", 0)
 		}
 		return nil, decision, false, nil
 	}
@@ -232,7 +235,7 @@ func (s *OpenAIGatewayService) selectContinuityAccount(ctx context.Context, req 
 	}
 	if accountID <= 0 {
 		if st := continuityState(ctx); st != nil && st.migrationUnsafe {
-			return nil, decision, true, ErrOpenAIContextIncomplete
+			return nil, decision, true, openAIContextIncomplete(ctx, "session_binding_missing", 0)
 		}
 		return nil, decision, false, nil
 	}
@@ -258,7 +261,7 @@ func (s *OpenAIGatewayService) selectContinuityAccount(ctx context.Context, req 
 		return selection, decision, true, nil
 	}
 	if st := continuityState(ctx); st != nil && st.migrationUnsafe {
-		return nil, decision, true, ErrOpenAIContextIncomplete
+		return nil, decision, true, openAIContextIncomplete(ctx, "bound_account_not_selectable", accountID)
 	}
 	// No upstream history reference: the protocol's request carries its context.
 	// The old binding is kept until a replacement turn succeeds.
@@ -339,38 +342,67 @@ func checkOpenAIContinuityBeforeForward(ctx context.Context, account *Account) e
 	return nil
 }
 
-// External item references and encrypted state are not portable between accounts.
-// The mere presence of tool call pairs cannot prove ordinary history completeness.
+// openAIContextIncomplete records the rejecting branch at WARN so it is visible
+// with production INFO logging. Only hashes, booleans and fixed categories are
+// logged, never opaque IDs or request content. All callers retain the same public
+// error and routing policy.
+func openAIContextIncomplete(ctx context.Context, reason string, accountID int64) error {
+	fields := []zap.Field{zap.String("reason", reason), zap.String("error_code", ErrOpenAIContextIncomplete.Reason)}
+	if accountID > 0 {
+		fields = append(fields, zap.Int64("account_id", accountID))
+	}
+	if st := continuityState(ctx); st != nil {
+		st.mu.Lock()
+		fields = append(fields,
+			zap.Int64("group_id", st.groupID),
+			zap.String("session_hash", st.hash),
+			zap.Bool("previous_response_present", st.previousResponseID != ""),
+			zap.Bool("migration_unsafe", st.migrationUnsafe),
+			zap.String("non_portable_reason", st.nonPortableReason),
+		)
+		st.mu.Unlock()
+	}
+	logger.FromContext(ctx).Warn("openai.session_context_incomplete", fields...)
+	return ErrOpenAIContextIncomplete
+}
+
 func openAIRequestHasNonPortableState(body []byte) bool {
+	return openAIRequestNonPortableReason(body) != ""
+}
+
+// External item references and encrypted state are not portable between accounts.
+// Return the first detected category without retaining any request content.
+// The mere presence of tool call pairs cannot prove ordinary history completeness.
+func openAIRequestNonPortableReason(body []byte) string {
 	body = []byte(openAIRequestPayloadView(body).Raw)
 	coverage := AnalyzeToolCallOutputContextCoverageBytes(body)
 	if coverage.HasFunctionCallOutput && !coverage.ContextCoversAllCallIDs {
-		return true
+		return "unmatched_tool_output"
 	}
 	if v := gjson.GetBytes(body, "conversation"); v.Exists() && v.Type != gjson.Null && v.String() != "" {
-		return true
+		return "conversation_reference"
 	}
-	unsafe := false
+	reason := ""
 	var checkReferences func(gjson.Result)
 	checkReferences = func(value gjson.Result) {
-		if !value.IsObject() && !value.IsArray() {
+		if reason != "" || (!value.IsObject() && !value.IsArray()) {
 			return
 		}
 		value.ForEach(func(key, v gjson.Result) bool {
 			switch key.String() {
 			case "file_id", "file_ids", "vector_store_ids", "encrypted_content":
 				if v.Exists() && v.Type != gjson.Null && v.String() != "" && v.Raw != "[]" {
-					unsafe = true
+					reason = key.String()
 				}
 			case "container":
 				if v.Type == gjson.String && v.String() != "auto" && v.String() != "" {
-					unsafe = true
+					reason = "container_reference"
 				}
 			}
-			if !unsafe {
+			if reason == "" {
 				checkReferences(v)
 			}
-			return !unsafe
+			return reason == ""
 		})
 	}
 	checkReferences(gjson.GetBytes(body, "input"))
@@ -379,16 +411,23 @@ func openAIRequestHasNonPortableState(body []byte) bool {
 		if kind == "file_search" || kind == "code_interpreter" {
 			checkReferences(tool)
 		}
-		return !unsafe
+		return reason == ""
 	})
 	gjson.GetBytes(body, "input").ForEach(func(_, item gjson.Result) bool {
-		if item.Get("type").String() == "item_reference" || item.Get("encrypted_content").String() != "" {
-			unsafe = true
+		if reason != "" {
+			return false
+		}
+		if item.Get("type").String() == "item_reference" {
+			reason = "item_reference"
+			return false
+		}
+		if item.Get("encrypted_content").String() != "" {
+			reason = "encrypted_content"
 			return false
 		}
 		return true
 	})
-	return unsafe
+	return reason
 }
 
 // ClaimOpenAIContinuityWaitMigration permits one bounded reselection after a
@@ -494,12 +533,13 @@ func RetryOpenAIContinuityAccount(ctx context.Context, accountID int64) {
 func OpenAIContinuityMigrationError(ctx context.Context) error {
 	if st := continuityState(ctx); st != nil && st.enabled {
 		st.mu.Lock()
-		defer st.mu.Unlock()
-		if st.previousResponseID != "" {
+		previousResponseID, migrationUnsafe := st.previousResponseID, st.migrationUnsafe
+		st.mu.Unlock()
+		if previousResponseID != "" {
 			return ErrOpenAIContinuityUnavailable
 		}
-		if st.migrationUnsafe {
-			return ErrOpenAIContextIncomplete
+		if migrationUnsafe {
+			return openAIContextIncomplete(ctx, "failover_requires_non_portable_history", 0)
 		}
 	}
 	return nil

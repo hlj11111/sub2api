@@ -169,7 +169,8 @@ func (s *OpenAIGatewayService) GenerateSessionHash(c *gin.Context, body []byte) 
 	if c != nil && c.Request != nil && len(body) > 0 {
 		if st := continuityState(c.Request.Context()); st != nil {
 			st.mu.Lock()
-			st.migrationUnsafe = openAIRequestHasNonPortableState(body)
+			st.nonPortableReason = openAIRequestNonPortableReason(body)
+			st.migrationUnsafe = st.nonPortableReason != ""
 			st.mu.Unlock()
 		}
 	}

@@ -7,8 +7,11 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 )
 
 func TestOpenAIContinuityScopesRoutingWithoutChangingCacheIdentity(t *testing.T) {
@@ -26,12 +29,93 @@ func TestOpenAIContinuityScopesRoutingWithoutChangingCacheIdentity(t *testing.T)
 }
 func TestOpenAIContinuityMissingHistoryCannotMoveEvenWithToolCoverage(t *testing.T) {
 	svc := &OpenAIGatewayService{}
-	ctx := context.WithValue(context.Background(), openAIContinuityKey{}, &openAIContinuityState{})
+	core, logs := observer.New(zap.WarnLevel)
+	ctx := logger.IntoContext(context.Background(), zap.New(core).With(zap.String("request_id", "test-request")))
+	ctx = context.WithValue(ctx, openAIContinuityKey{}, &openAIContinuityState{})
 	_, _, handled, err := svc.selectContinuityAccount(ctx, OpenAIAccountScheduleRequest{
 		Platform: PlatformOpenAI, PreviousResponseID: "resp_missing", PreviousResponseCanMove: true,
 	})
 	require.True(t, handled)
 	require.ErrorIs(t, err, ErrOpenAIContextIncomplete)
+	require.Len(t, logs.All(), 1)
+	fields := logs.All()[0].ContextMap()
+	require.Equal(t, "test-request", fields["request_id"])
+	require.Equal(t, "previous_response_owner_missing", fields["reason"])
+	require.Equal(t, true, fields["previous_response_present"])
+	require.NotContains(t, fields, "previous_response_id")
+}
+
+func TestOpenAIContinuityDiagnosticsDistinguishMissingSessionAndBinding(t *testing.T) {
+	for _, tc := range []struct {
+		hash   string
+		reason string
+	}{
+		{"", "session_identity_missing"},
+		{"s", "session_binding_missing"},
+	} {
+		t.Run(tc.reason, func(t *testing.T) {
+			core, logs := observer.New(zap.WarnLevel)
+			ctx := logger.IntoContext(context.Background(), zap.New(core))
+			ctx = context.WithValue(ctx, openAIContinuityKey{}, &openAIContinuityState{
+				migrationUnsafe: true, nonPortableReason: "encrypted_content",
+			})
+			cache := &schedulerTestGatewayCache{sessionBindings: map[string]int64{}}
+			svc := &OpenAIGatewayService{cache: cache}
+			selection, _, handled, err := svc.selectContinuityAccount(ctx, OpenAIAccountScheduleRequest{
+				Platform: PlatformOpenAI, SessionHash: tc.hash,
+			})
+			require.Nil(t, selection)
+			require.True(t, handled)
+			require.ErrorIs(t, err, ErrOpenAIContextIncomplete)
+			require.Len(t, logs.All(), 1)
+			require.Equal(t, tc.reason, logs.All()[0].ContextMap()["reason"])
+			require.Empty(t, cache.sessionBindings, "diagnostics must not create or repair a binding")
+		})
+	}
+}
+
+func TestOpenAIContinuityDiagnosticsDoNotRetainPrivatePayload(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		body   string
+		reason string
+	}{
+		{"encrypted", `{"input":[{"type":"reasoning","encrypted_content":"private-ciphertext"}]}`, "encrypted_content"},
+		{"tool_output", `{"input":[{"type":"function_call_output","call_id":"private-call","output":"private-output"}]}`, "unmatched_tool_output"},
+		{"conversation", `{"conversation":"private-conversation"}`, "conversation_reference"},
+		{"item", `{"input":[{"type":"item_reference","id":"private-item"}]}`, "item_reference"},
+		{"file", `{"input":[{"content":[{"type":"input_file","file_id":"private-file"}]}]}`, "file_id"},
+		{"container", `{"tools":[{"type":"code_interpreter","container":"private-container"}]}`, "container_reference"},
+		{"portable", `{"input":"private-message"}`, ""},
+		{"paired_tools", `{"input":[{"type":"function_call","call_id":"private-call","name":"test","arguments":"{}"},{"type":"function_call_output","call_id":"private-call","output":"private-output"}]}`, ""},
+		{"ws_envelope", `{"type":"response.create","response":{"input":[{"type":"reasoning","encrypted_content":"private-ciphertext"}]}}`, "encrypted_content"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			core, logs := observer.New(zap.WarnLevel)
+			c, _ := gin.CreateTestContext(httptest.NewRecorder())
+			c.Request = httptest.NewRequest("POST", "/v1/responses", nil)
+			c.Request.Header.Set("session_id", "private-session")
+			c.Request = c.Request.WithContext(logger.IntoContext(c.Request.Context(), zap.New(core)))
+			svc := &OpenAIGatewayService{}
+			hash := svc.GenerateSessionHash(c, []byte(tc.body))
+			ctx := c.Request.Context()
+			require.NoError(t, svc.beginContinuity(ctx, nil, hash))
+			require.Equal(t, tc.reason, continuityState(ctx).nonPortableReason)
+			require.Equal(t, tc.reason != "", continuityState(ctx).migrationUnsafe)
+			require.ErrorIs(t, openAIContextIncomplete(ctx, "bound_account_not_selectable", 42), ErrOpenAIContextIncomplete)
+			require.Len(t, logs.All(), 1)
+			fields := logs.All()[0].ContextMap()
+			require.Equal(t, int64(42), fields["account_id"])
+			require.Equal(t, hash, fields["session_hash"])
+			require.Equal(t, tc.reason, fields["non_portable_reason"])
+			require.NotContains(t, logs.All()[0].ContextMap(), "request_body")
+			for _, value := range fields {
+				if text, ok := value.(string); ok {
+					require.NotContains(t, text, "private-")
+				}
+			}
+		})
+	}
 }
 
 func TestOpenAIContinuityBusyAccountWaitsDespiteEscapeAndWeightedSettings(t *testing.T) {

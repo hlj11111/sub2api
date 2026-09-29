@@ -439,7 +439,7 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 	// The ingress replay path removes this ID only after proving completeness.
 	// Do not let the legacy body normalizer silently discard an unresolved chain.
 	if continuityEnabled(ctx) && strings.TrimSpace(gjson.GetBytes(payload, "previous_response_id").String()) != "" {
-		return nil, ErrOpenAIContextIncomplete
+		return nil, openAIContextIncomplete(ctx, "http_bridge_unresolved_previous_response", account.ID)
 	}
 	responseModelObserver := &upstreamResponseModelObserver{}
 

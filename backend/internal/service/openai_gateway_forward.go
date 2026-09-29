@@ -36,7 +36,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 	}
 
 	if continuityEnabled(ctx) && account != nil && strings.TrimSpace(gjson.GetBytes(body, "previous_response_id").String()) != "" && (account.UsesNativeCNResponses() || shouldForwardOpenAIResponsesViaRawChatCompletions(account)) {
-		return nil, ErrOpenAIContextIncomplete
+		return nil, openAIContextIncomplete(ctx, "forward_protocol_cannot_resume_previous_response", account.ID)
 	}
 	beginUpstreamResponseModelObservation(c)
 	ClearActualOpenAIUpstreamEndpoint(c)

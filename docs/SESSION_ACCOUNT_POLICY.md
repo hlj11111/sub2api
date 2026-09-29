@@ -65,5 +65,19 @@ Redis 会话占用与版本校验约束并发选号和绑定提交。只在成�
 已经开始输出或客户端已断开时不自动重放；SSE 已提交响应头时通过流内错误结束。
 WebSocket 和其他协议保留现有恢复策略。
 
+### 409 拒绝诊断
+
+`SESSION_CONTEXT_INCOMPLETE` 的各拒绝分支输出 WARN 事件
+`openai.session_context_incomplete`，沿用请求日志中的 `request_id` 和
+`client_request_id`。`reason` 区分响应归属缺失、会话标识缺失、绑定缺失、
+绑定账号不可选、重试后无法迁移，以及协议转换无法续接等情况；已知账号时记录
+`account_id`。`session_hash` 可关联 Redis 中的会话绑定，但不输出原始会话 ID。
+`previous_response_present`、`migration_unsafe` 和 `non_portable_reason`
+记录有无前序响应引用、能否迁移及第一个不可迁移原因，不保存正文、工具结果、
+加密内容、文件 ID 或凭据。`bound_account_not_selectable` 只表明原账号未被选中，
+并不单独证明是冷却、模型不兼容还是并发等具体限制。
+
+该诊断需随新镜像上线才生效，不能补回旧请求未保存的请求体、会话标识或历史绑定。
+
 新增迁移 `242_add_usage_log_session_id_index_notx.sql` 为精确会话查询建立并发索引，
 不改写历史迁移、不改变业务数据。上线仍按仓库部署流程执行。

@@ -130,7 +130,11 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 	// accounts never forward the body unchanged to a Chat Completions endpoint.
 	isResponsesShape := !gjson.GetBytes(body, "messages").Exists() && gjson.GetBytes(body, "input").Exists()
 	if continuityEnabled(ctx) && strings.TrimSpace(gjson.GetBytes(body, "previous_response_id").String()) != "" && (!isResponsesShape || account.UsesNativeCNResponses() || shouldForwardOpenAIResponsesViaRawChatCompletions(account)) {
-		return nil, ErrOpenAIContextIncomplete
+		accountID := int64(0)
+		if account != nil {
+			accountID = account.ID
+		}
+		return nil, openAIContextIncomplete(ctx, "chat_protocol_cannot_resume_previous_response", accountID)
 	}
 
 	// OpenCode Go：按模型原生协议分流（与 inbound 协议正交）。
