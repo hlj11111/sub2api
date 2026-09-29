@@ -120,6 +120,10 @@ func (r *usageLogRepository) ListWithFilters(ctx context.Context, params paginat
 		conditions = append(conditions, fmt.Sprintf("request_id = $%d", len(args)+1))
 		args = append(args, requestID)
 	}
+	if sessionID := strings.TrimSpace(filters.SessionID); sessionID != "" {
+		conditions = append(conditions, fmt.Sprintf("session_id = $%d", len(args)+1))
+		args = append(args, sessionID)
+	}
 	conditions, args = appendUsageLogModelWhereCondition(conditions, args, filters.Model, filters.ModelFilterSource)
 	conditions, args = appendRequestTypeOrStreamWhereCondition(conditions, args, filters.RequestType, filters.Stream)
 	conditions, args = appendNativeCompactionV2WhereCondition(conditions, args, filters.NativeCompactionV2, "")
@@ -169,7 +173,7 @@ func upstreamModelMismatchCondition(column string, mismatch bool) string {
 }
 
 func shouldUseFastUsageLogTotal(filters UsageLogFilters) bool {
-	if filters.ExactTotal {
+	if filters.ExactTotal || strings.TrimSpace(filters.SessionID) != "" {
 		return false
 	}
 	// 强选择过滤下记录集通常较小，保留精确总数。

@@ -255,6 +255,26 @@
           <span class="text-sm text-gray-600 dark:text-gray-400">{{ formatDateTime(value) }}</span>
         </template>
 
+        <template #cell-session_id="{ row }">
+          <div v-if="row.session_id" class="flex max-w-[240px] items-center gap-1.5">
+            <button
+              type="button"
+              class="truncate font-mono text-xs text-primary-600 hover:underline dark:text-primary-400"
+              :title="`${t('admin.usage.filterBySession')}: ${row.session_id}`"
+              @click="emit('sessionClick', row.session_id)"
+            >{{ row.session_id }}</button>
+            <button
+              type="button"
+              class="shrink-0 rounded p-0.5 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
+              :title="copiedRequestId === row.session_id ? t('keys.copied') : t('keys.copyToClipboard')"
+              @click="copyIdentifier(row.session_id, t('admin.usage.sessionIdCopied'))"
+            >
+              <Icon :name="copiedRequestId === row.session_id ? 'check' : 'copy'" size="sm" class="h-3.5 w-3.5" />
+            </button>
+          </div>
+          <span v-else class="text-sm text-gray-400 dark:text-gray-500">-</span>
+        </template>
+
         <template #cell-request_id="{ row }">
           <div v-if="row.request_id" class="flex max-w-[160px] items-center gap-1.5">
             <span class="truncate font-mono text-xs text-gray-500 dark:text-gray-400" :title="row.request_id">
@@ -609,6 +629,7 @@ const props = withDefaults(defineProps<Props>(), {
   flat: false
 })
 const emit = defineEmits<{
+  sessionClick: [sessionID: string]
   userClick: [userID: number, email?: string]
   sort: [key: string, order: 'asc' | 'desc']
   ipGeoBatchFailed: []

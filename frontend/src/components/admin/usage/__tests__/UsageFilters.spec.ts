@@ -305,3 +305,14 @@ describe('UsageFilters — native compaction filter', () => {
     expect(wrapper.emitted('change')).toBeTruthy()
   })
 })
+
+it('filters by the complete trimmed session ID and allows clearing it', async () => {
+  const wrapper = mountFilters()
+  await wrapper.get('#usage-session-id').setValue('  session-abc  ')
+  await wrapper.get('#usage-session-id').trigger('change')
+  expect(wrapper.props('modelValue').session_id).toBe('session-abc')
+  expect(wrapper.emitted('change')).toBeTruthy()
+  await wrapper.get('#usage-session-id').setValue('')
+  expect(wrapper.props('modelValue').session_id).toBe('')
+  wrapper.unmount()
+})

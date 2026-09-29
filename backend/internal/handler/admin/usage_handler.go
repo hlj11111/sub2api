@@ -189,6 +189,7 @@ func (h *UsageHandler) List(c *gin.Context) {
 		SortOrder: c.DefaultQuery("sort_order", "desc"),
 	}
 	filters := usagestats.UsageLogFilters{
+		SessionID:             strings.TrimSpace(c.Query("session_id")),
 		UserID:                userID,
 		APIKeyID:              apiKeyID,
 		AccountID:             accountID,
@@ -349,6 +350,7 @@ func (h *UsageHandler) Stats(c *gin.Context) {
 
 	// Build filters and call GetStatsWithFilters
 	filters := usagestats.UsageLogFilters{
+		SessionID:             strings.TrimSpace(c.Query("session_id")),
 		UserID:                userID,
 		APIKeyID:              apiKeyID,
 		AccountID:             accountID,

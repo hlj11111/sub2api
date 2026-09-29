@@ -45,6 +45,7 @@ export async function getRealtimeMetrics(): Promise<{
 }
 
 export interface TrendParams {
+  session_id?: string
   start_date?: string
   end_date?: string
   granularity?: 'day' | 'hour'
@@ -78,6 +79,7 @@ export async function getUsageTrend(params?: TrendParams): Promise<TrendResponse
 }
 
 export interface ModelStatsParams {
+  session_id?: string
   start_date?: string
   end_date?: string
   user_id?: number
@@ -110,6 +112,7 @@ export async function getModelStats(params?: ModelStatsParams): Promise<ModelSta
 }
 
 export interface GroupStatsParams {
+  session_id?: string
   start_date?: string
   end_date?: string
   user_id?: number

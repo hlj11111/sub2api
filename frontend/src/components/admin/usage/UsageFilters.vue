@@ -78,6 +78,19 @@
           </div>
         </div>
 
+        <div v-if="mode === 'usage'" class="w-full sm:w-auto sm:min-w-[280px]">
+          <label for="usage-session-id" class="input-label">{{ t('admin.usage.sessionId') }}</label>
+          <input
+            id="usage-session-id"
+            v-model.trim="filters.session_id"
+            type="text"
+            maxlength="255"
+            class="input font-mono"
+            :placeholder="t('admin.usage.sessionIdPlaceholder')"
+            @change="emitChange"
+          />
+        </div>
+
         <!-- Model Filter -->
         <div class="w-full sm:w-auto sm:min-w-[220px]">
           <label class="input-label">{{ t('usage.model') }}</label>

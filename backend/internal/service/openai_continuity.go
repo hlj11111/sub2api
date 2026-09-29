@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"strings"
 	"sync"
 	"time"
@@ -17,7 +18,7 @@ import (
 )
 
 var ErrOpenAIContinuityUnavailable = infraerrors.ServiceUnavailable("SESSION_ACCOUNT_UNAVAILABLE", "The session account is temporarily unavailable; retry this conversation later")
-var ErrOpenAIContextIncomplete = infraerrors.Conflict("SESSION_CONTEXT_INCOMPLETE", "Cannot safely continue this conversation: its previous response is unavailable and complete replay history is not available")
+var ErrOpenAIContextIncomplete = infraerrors.Conflict("SESSION_CONTEXT_INCOMPLETE", "Cannot safely continue this conversation: the original upstream is unavailable and the request contains account-bound state or incomplete history; retry later or resend complete conversation history")
 
 // The lease token also acts as a fencing version: a late stream completion can
 // never overwrite a binding established by a newer request.
@@ -34,6 +35,8 @@ type openAIContinuityState struct {
 	routingHashes        sync.Map // original cache hash -> stable account routing hash
 	wsRoutingHash        string   // connection identity for incremental WS turns
 	enabled              bool
+	explicitSession      bool
+	retryAccountID       int64 // request-local retry target; never commits a session binding
 	migrationUnsafe      bool
 	previousResponseID   string
 	waitMigrationClaimed bool
@@ -55,7 +58,7 @@ func attachOpenAIContinuity(c *gin.Context) {
 	if c == nil || c.Request == nil || continuityState(c.Request.Context()) != nil {
 		return
 	}
-	c.Request = c.Request.WithContext(context.WithValue(c.Request.Context(), openAIContinuityKey{}, &openAIContinuityState{}))
+	c.Request = c.Request.WithContext(context.WithValue(c.Request.Context(), openAIContinuityKey{}, &openAIContinuityState{explicitSession: extractClientSessionID(c.Request.Header) != ""}))
 }
 func continuityEnabled(ctx context.Context) bool {
 	st := continuityState(ctx)
@@ -214,7 +217,16 @@ func (s *OpenAIGatewayService) selectContinuityAccount(ctx context.Context, req 
 		}
 		return nil, decision, false, nil
 	}
-	accountID, err := s.getStickySessionAccountID(ctx, req.GroupID, req.SessionHash)
+	var accountID int64
+	if st := continuityState(ctx); st != nil {
+		st.mu.Lock()
+		accountID, st.retryAccountID = st.retryAccountID, 0
+		st.mu.Unlock()
+	}
+	var err error
+	if accountID == 0 {
+		accountID, err = s.getStickySessionAccountID(ctx, req.GroupID, req.SessionHash)
+	}
 	if err != nil && !errors.Is(err, ErrStickySessionNotFound) {
 		return nil, decision, true, ErrOpenAIContinuityUnavailable.WithCause(err)
 	}
@@ -447,4 +459,48 @@ func (s *OpenAIGatewayService) AcquireOpenAIWebSocketAccountSlot(ctx context.Con
 			}
 		}
 	}
+}
+
+// PrepareOpenAIContinuityRecovery adds a small retry budget for transient upstream
+// failures in an established request context. Explicit pool settings and typed
+// failure policies retain precedence; authentication/payload errors never opt in.
+func PrepareOpenAIContinuityRecovery(ctx context.Context, account *Account, failure *UpstreamFailoverError) {
+	st := continuityState(ctx)
+	if st == nil || !st.enabled || !st.explicitSession || st.hash == "" || account == nil || account.Platform != PlatformOpenAI || account.IsPoolMode() || failure == nil ||
+		failure.RetryableOnSameAccount || !failure.ShouldRetryNextAccount() || failure.IsCredentialFailure() || failure.Reason != "" {
+		return
+	}
+	switch failure.StatusCode {
+	case http.StatusInternalServerError, http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
+		failure.RetryableOnSameAccount = true
+		failure.RequestScopedTransient = true
+		failure.SameAccountRetryMax = 2
+	}
+}
+
+// RetryOpenAIContinuityAccount keeps a retry on the attempted account even before
+// its first successful turn has committed a binding. Selection still rechecks
+// current permissions, health, model compatibility and concurrency limits.
+func RetryOpenAIContinuityAccount(ctx context.Context, accountID int64) {
+	if st := continuityState(ctx); st != nil && st.enabled {
+		st.mu.Lock()
+		st.retryAccountID = accountID
+		st.mu.Unlock()
+	}
+}
+
+// OpenAIContinuityMigrationError is checked after original-account retries and
+// before excluding that account. Never discard opaque history to force a replay.
+func OpenAIContinuityMigrationError(ctx context.Context) error {
+	if st := continuityState(ctx); st != nil && st.enabled {
+		st.mu.Lock()
+		defer st.mu.Unlock()
+		if st.previousResponseID != "" {
+			return ErrOpenAIContinuityUnavailable
+		}
+		if st.migrationUnsafe {
+			return ErrOpenAIContextIncomplete
+		}
+	}
+	return nil
 }

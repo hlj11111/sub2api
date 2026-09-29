@@ -273,7 +273,7 @@ func (h *DashboardHandler) GetUsageTrend(c *gin.Context) {
 		return
 	}
 
-	trend, hit, err := h.getUsageTrendCached(c.Request.Context(), startTime, endTime, granularity, userID, apiKeyID, accountID, groupID, model, requestType, stream, nativeCompactionV2, billingType, upstreamModelMismatch)
+	trend, hit, err := h.getUsageTrendCached(c.Request.Context(), startTime, endTime, granularity, userID, apiKeyID, accountID, groupID, model, requestType, stream, nativeCompactionV2, billingType, upstreamModelMismatch, strings.TrimSpace(c.Query("session_id")))
 	if err != nil {
 		response.Error(c, 500, "Failed to get usage trend")
 		return
@@ -365,7 +365,7 @@ func (h *DashboardHandler) GetModelStats(c *gin.Context) {
 		return
 	}
 
-	stats, hit, err := h.getModelStatsCached(c.Request.Context(), startTime, endTime, userID, apiKeyID, accountID, groupID, modelSource, requestType, stream, nativeCompactionV2, billingType, upstreamModelMismatch)
+	stats, hit, err := h.getModelStatsCached(c.Request.Context(), startTime, endTime, userID, apiKeyID, accountID, groupID, modelSource, requestType, stream, nativeCompactionV2, billingType, upstreamModelMismatch, strings.TrimSpace(c.Query("session_id")))
 	if err != nil {
 		response.Error(c, 500, "Failed to get model statistics")
 		return
@@ -447,7 +447,7 @@ func (h *DashboardHandler) GetGroupStats(c *gin.Context) {
 		return
 	}
 
-	stats, hit, err := h.getGroupStatsCached(c.Request.Context(), startTime, endTime, userID, apiKeyID, accountID, groupID, requestType, stream, nativeCompactionV2, billingType, upstreamModelMismatch)
+	stats, hit, err := h.getGroupStatsCached(c.Request.Context(), startTime, endTime, userID, apiKeyID, accountID, groupID, requestType, stream, nativeCompactionV2, billingType, upstreamModelMismatch, strings.TrimSpace(c.Query("session_id")))
 	if err != nil {
 		response.Error(c, 500, "Failed to get group statistics")
 		return

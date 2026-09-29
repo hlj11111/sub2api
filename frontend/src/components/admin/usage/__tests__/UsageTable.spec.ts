@@ -93,6 +93,7 @@ const DataTableStub = {
         <slot name="cell-billing_mode" :row="row" />
         <slot name="cell-tokens" :row="row" />
         <slot name="cell-cost" :row="row" />
+        <slot name="cell-session_id" :row="row" />
         <slot name="cell-request_id" :row="row" />
         <slot name="cell-upstream_request_id" :row="row" />
       </div>
@@ -853,4 +854,16 @@ describe('admin UsageTable deleted-user badge', () => {
     expect(wrapper.text()).not.toContain('Deleted')
     expect(wrapper.text()).toContain('active@test.com')
   })
+})
+
+it('shows a session identifier and lets the administrator follow the session', async () => {
+  const wrapper = mount(UsageTable, {
+    props: { data: [{ ...baseImageRow, session_id: 'session-abc' }], loading: false, columns: [] },
+    global: { stubs: { DataTable: DataTableStub, EmptyState: true, Icon: true } },
+  })
+  const button = wrapper.findAll('button').find(button => button.text() === 'session-abc')
+  expect(button).toBeDefined()
+  await button!.trigger('click')
+  expect(wrapper.emitted('sessionClick')).toEqual([['session-abc']])
+  wrapper.unmount()
 })

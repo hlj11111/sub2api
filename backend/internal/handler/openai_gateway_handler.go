@@ -886,6 +886,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 					if c.Writer.Written() {
 						streamStarted = true
 					}
+					service.PrepareOpenAIContinuityRecovery(c.Request.Context(), account, failoverErr)
 					if failoverErr.ShouldReportAccountScheduleFailure() {
 						h.gatewayService.ReportOpenAIAccountScheduleResult(account, openAIAccountScheduleModel(c, account, forwardModel, requireCompact, nil), false, nil, err)
 					}
@@ -897,7 +898,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 						h.handleFailoverExhausted(c, failoverErr, streamStarted)
 						return
 					}
-					// 池模式：同账号重试
+					// Session recovery and pool mode share the bounded same-account retry loop.
 					if failoverErr.RetryableOnSameAccount {
 						retryLimit := effectiveSameAccountRetryLimit(failoverErr, account)
 						if sameAccountRetryAllowed(failoverErr, sameAccountRetryCount[account.ID], retryLimit) {
@@ -915,8 +916,14 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 								return
 							case <-time.After(retryDelay):
 							}
+							service.RetryOpenAIContinuityAccount(c.Request.Context(), account.ID)
 							continue
 						}
+					}
+					if migrationErr := service.OpenAIContinuityMigrationError(c.Request.Context()); migrationErr != nil {
+						reqLog.Warn("openai.session_recovery_blocked", zap.Int64("account_id", account.ID), zap.Int("retry_count", sameAccountRetryCount[account.ID]), zap.Error(migrationErr))
+						h.handleContinuitySelectionError(c, migrationErr, streamStarted)
+						return
 					}
 					h.gatewayService.RecordOpenAIAccountSwitch()
 					failedAccountIDs[account.ID] = struct{}{}

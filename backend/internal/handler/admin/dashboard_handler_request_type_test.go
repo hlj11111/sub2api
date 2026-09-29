@@ -14,6 +14,9 @@ import (
 )
 
 type dashboardUsageRepoCapture struct {
+	trendSession string
+	modelSession string
+	groupSession string
 	service.UsageLogRepository
 	trendRequestType      *int16
 	trendStream           *bool
@@ -39,6 +42,7 @@ func (s *dashboardUsageRepoCapture) GetUsageTrendWithUsageFilters(
 	s.trendRequestType = filters.RequestType
 	s.trendStream = filters.Stream
 	s.trendNativeCompaction = filters.NativeCompactionV2
+	s.trendSession = filters.SessionID
 	s.trendMismatch = filters.UpstreamModelMismatch
 	return []usagestats.TrendDataPoint{}, nil
 }
@@ -67,6 +71,7 @@ func (s *dashboardUsageRepoCapture) GetModelStatsWithUsageFiltersBySource(
 	s.modelRequestType = filters.RequestType
 	s.modelStream = filters.Stream
 	s.modelNativeCompaction = filters.NativeCompactionV2
+	s.modelSession = filters.SessionID
 	s.modelMismatch = filters.UpstreamModelMismatch
 	return []usagestats.ModelStat{}, nil
 }
@@ -77,6 +82,7 @@ func (s *dashboardUsageRepoCapture) GetGroupStatsWithUsageFilters(
 	filters usagestats.UsageLogFilters,
 ) ([]usagestats.GroupStat, error) {
 	s.groupNativeCompaction = filters.NativeCompactionV2
+	s.groupSession = filters.SessionID
 	s.groupMismatch = filters.UpstreamModelMismatch
 	return []usagestats.GroupStat{}, nil
 }
@@ -113,6 +119,7 @@ func newDashboardRequestTypeTestRouter(repo *dashboardUsageRepoCapture) *gin.Eng
 	dashboardSvc := service.NewDashboardService(repo, nil, nil, nil)
 	handler := NewDashboardHandler(dashboardSvc, nil)
 	router := gin.New()
+	router.GET("/admin/dashboard/snapshot-v2", handler.GetSnapshotV2)
 	router.GET("/admin/dashboard/trend", handler.GetUsageTrend)
 	router.GET("/admin/dashboard/models", handler.GetModelStats)
 	router.GET("/admin/dashboard/groups", handler.GetGroupStats)
@@ -323,4 +330,29 @@ func TestDashboardUsersRankingLimitAndCache(t *testing.T) {
 
 	require.Equal(t, http.StatusOK, rec2.Code)
 	require.Equal(t, "hit", rec2.Header().Get("X-Snapshot-Cache"))
+}
+
+func TestDashboardSessionFiltersAndCacheIsolation(t *testing.T) {
+	repo := &dashboardUsageRepoCapture{}
+	router := newDashboardRequestTypeTestRouter(repo)
+	for _, session := range []string{"session-filter-a", "session-filter-b"} {
+		for _, path := range []string{"trend", "models", "groups", "snapshot-v2"} {
+			repo.trendSession, repo.modelSession, repo.groupSession = "", "", ""
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/admin/dashboard/"+path+"?session_id="+session+"&include_stats=false&include_users_trend=false", nil))
+			require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+			if path == "trend" {
+				require.Equal(t, session, repo.trendSession)
+			}
+			if path == "models" {
+				require.Equal(t, session, repo.modelSession)
+			}
+			if path == "groups" {
+				require.Equal(t, session, repo.groupSession)
+			}
+			if path == "snapshot-v2" {
+				require.Contains(t, rec.Body.String(), "generated_at")
+			}
+		}
+	}
 }

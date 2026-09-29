@@ -217,3 +217,18 @@ func TestAdminUsageStatsInvalidStream(t *testing.T) {
 
 	require.Equal(t, http.StatusBadRequest, rec.Code)
 }
+
+func TestAdminUsageSessionFilter(t *testing.T) {
+	repo := &adminUsageRepoCapture{}
+	router := newAdminUsageRequestTypeTestRouter(repo)
+	for _, path := range []string{"/admin/usage", "/admin/usage/stats"} {
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path+"?session_id=%20session-123%20&nocache=true", nil))
+		require.Equal(t, http.StatusOK, rec.Code)
+	}
+	require.Equal(t, "session-123", repo.listFilters.SessionID)
+	require.Equal(t, "session-123", repo.statsFilters.SessionID)
+	first := usageStatsCacheKey(repo.statsFilters)
+	repo.statsFilters.SessionID = "another-session"
+	require.NotEqual(t, first, usageStatsCacheKey(repo.statsFilters))
+}

@@ -132,6 +132,7 @@
             :default-sort-key="'created_at'"
             :default-sort-order="'desc'"
             @sort="handleSort"
+            @session-click="filterBySession"
             @userClick="handleUserClick"
             @ipGeoBatchFailed="handleIpGeoBatchFailed"
           />
@@ -445,6 +446,7 @@ const loadModelStats = async (source: ModelDistributionSource, force = false) =>
     const baseParams = {
       start_date: filters.value.start_date || startDate.value,
       end_date: filters.value.end_date || endDate.value,
+      session_id: filters.value.session_id,
       user_id: filters.value.user_id,
       model: filters.value.model,
       api_key_id: filters.value.api_key_id,
@@ -496,6 +498,7 @@ const loadChartData = async () => {
       start_date: filters.value.start_date || startDate.value,
       end_date: filters.value.end_date || endDate.value,
       granularity: granularity.value,
+      session_id: filters.value.session_id,
       user_id: filters.value.user_id,
       model: filters.value.model,
       api_key_id: filters.value.api_key_id,
@@ -517,6 +520,11 @@ const loadChartData = async () => {
     groupStats.value = snapshot.groups || []
   } catch (error) { console.error('Failed to load chart data:', error) } finally { if (seq === chartReqSeq) chartsLoading.value = false }
 }
+const filterBySession = (sessionID: string) => {
+  filters.value = { ...filters.value, session_id: sessionID }
+  applyFilters()
+}
+
 const applyFilters = () => {
   pagination.page = 1
   invalidateModelStatsCache()
@@ -589,7 +597,7 @@ const exportToExcel = async () => {
       t('admin.usage.cacheReadCost'), t('admin.usage.cacheCreationCost'),
       t('usage.rate'), t('usage.accountMultiplier'), t('usage.original'), t('usage.userBilled'), t('usage.accountBilled'),
       t('usage.firstToken'), t('usage.duration'),
-      t('admin.usage.requestId'), t('admin.usage.upstreamRequestId'), t('usage.userAgent'), t('admin.usage.ipAddress')
+      t('admin.usage.sessionId'), t('admin.usage.requestId'), t('admin.usage.upstreamRequestId'), t('usage.userAgent'), t('admin.usage.ipAddress')
     ]
     const ws = XLSX.utils.aoa_to_sheet([headers])
     while (true) {
@@ -608,7 +616,7 @@ const exportToExcel = async () => {
         log.rate_multiplier?.toPrecision(4) || '1.00', (log.account_rate_multiplier ?? 1).toPrecision(4),
         log.total_cost?.toFixed(6) || '0.000000', log.actual_cost?.toFixed(6) || '0.000000',
         ((log.account_stats_cost ?? log.total_cost) * (log.account_rate_multiplier ?? 1)).toFixed(6), log.first_token_ms ?? '', log.duration_ms,
-        log.request_id || '', log.upstream_request_id || '', log.user_agent || '', log.ip_address || ''
+        log.session_id || '', log.request_id || '', log.upstream_request_id || '', log.user_agent || '', log.ip_address || ''
       ])
       if (rows.length) {
         XLSX.utils.sheet_add_aoa(ws, rows, { origin: -1 })
@@ -651,6 +659,7 @@ const allColumns = computed(() => [
   { key: 'cost', label: t('usage.cost'), sortable: false },
   { key: 'latency', label: t('usage.latency'), sortable: false },
   { key: 'created_at', label: t('usage.time'), sortable: true },
+  { key: 'session_id', label: t('admin.usage.sessionId'), sortable: false },
   { key: 'request_id', label: t('admin.usage.requestId'), sortable: false },
   { key: 'upstream_request_id', label: t('admin.usage.upstreamRequestId'), sortable: false },
   { key: 'user_agent', label: t('usage.userAgent'), sortable: false },

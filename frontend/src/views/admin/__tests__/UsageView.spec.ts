@@ -335,6 +335,45 @@ describe('admin UsageView native compaction filter', () => {
     expect(getModelStats).toHaveBeenCalledWith(expect.objectContaining({ native_compaction_v2: null }))
     expect(getSnapshotV2).toHaveBeenCalledWith(expect.objectContaining({ native_compaction_v2: null }))
   })
+
+  it('propagates session drill-down to logs and all aggregate queries and clears it on reset', async () => {
+    const wrapper = mountRouteFilteredUsageView()
+    vi.advanceTimersByTime(120)
+    await flushPromises()
+
+    list.mockClear()
+    getStats.mockClear()
+    getModelStats.mockClear()
+    getSnapshotV2.mockClear()
+
+    ;(wrapper.vm as any).filterBySession('session-abc')
+    await flushPromises()
+
+    expect(list).toHaveBeenCalledWith(
+      expect.objectContaining({ session_id: 'session-abc' }),
+      expect.anything()
+    )
+    expect(getStats).toHaveBeenCalledWith(expect.objectContaining({ session_id: 'session-abc' }))
+    expect(getModelStats).toHaveBeenCalledWith(expect.objectContaining({ session_id: 'session-abc' }))
+    expect(getSnapshotV2).toHaveBeenCalledWith(expect.objectContaining({ session_id: 'session-abc' }))
+
+    list.mockClear()
+    getStats.mockClear()
+    getModelStats.mockClear()
+    getSnapshotV2.mockClear()
+
+    ;(wrapper.vm as any).resetFilters()
+    await flushPromises()
+
+    expect((wrapper.vm as any).filters.session_id).toBeUndefined()
+    expect(list).toHaveBeenCalledWith(
+      expect.not.objectContaining({ session_id: 'session-abc' }),
+      expect.anything()
+    )
+    expect(getStats).toHaveBeenCalledWith(expect.not.objectContaining({ session_id: 'session-abc' }))
+    expect(getModelStats).toHaveBeenCalledWith(expect.not.objectContaining({ session_id: 'session-abc' }))
+    expect(getSnapshotV2).toHaveBeenCalledWith(expect.not.objectContaining({ session_id: 'session-abc' }))
+  })
 })
 
 describe('admin UsageView distribution metric toggles', () => {

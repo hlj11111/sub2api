@@ -3267,3 +3267,90 @@ func TestOpenAIResponsesWebSocketSimpleModeRechecksKeyWindows(t *testing.T) {
 		})
 	}
 }
+
+func TestOpenAIResponses_SessionTransientRetriesThenMigrates(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	groupID := int64(4203)
+	accounts := []service.Account{
+		{
+			ID: 9910, Name: "pool-api-key", Platform: service.PlatformOpenAI,
+			Type: service.AccountTypeAPIKey, Status: service.StatusActive, Schedulable: true, Priority: 1,
+			Credentials: map[string]any{
+				"api_key":  "sk-pool",
+				"base_url": "https://api.example.test",
+			},
+			Extra: map[string]any{"openai_passthrough": true},
+		},
+		{
+			ID: 9911, Name: "fallback-api-key", Platform: service.PlatformOpenAI,
+			Type: service.AccountTypeAPIKey, Status: service.StatusActive, Schedulable: true, Priority: 2,
+			Credentials: map[string]any{
+				"api_key":  "sk-fallback",
+				"base_url": "https://api.example.test",
+			},
+			Extra: map[string]any{"openai_passthrough": true},
+		},
+	}
+	cfg := &config.Config{RunMode: config.RunModeSimple}
+	cfg.Default.RateMultiplier = 1
+	cfg.Security.URLAllowlist.Enabled = false
+	cfg.Gateway.MaxAccountSwitches = 1
+
+	accountRepo := &openAIWSFailoverHandlerAccountRepoStub{accounts: accounts}
+	upstream := &openAIHTTPPassthroughAuthFailoverUpstream{statusCode: http.StatusBadGateway}
+	billingCacheSvc := service.NewBillingCacheService(nil, nil, nil, nil, nil, nil, cfg, nil)
+	t.Cleanup(billingCacheSvc.Stop)
+	gatewaySvc := service.NewOpenAIGatewayService(
+		accountRepo,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		cfg,
+		nil,
+		nil,
+		service.NewBillingService(cfg, nil),
+		nil,
+		billingCacheSvc,
+		upstream,
+		&service.DeferredService{},
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+	)
+	h := NewOpenAIGatewayHandler(
+		gatewaySvc,
+		service.NewConcurrencyService(nil),
+		billingCacheSvc,
+		service.NewAPIKeyService(nil, nil, nil, nil, nil, nil, cfg),
+		nil,
+		nil,
+		nil,
+		nil,
+		cfg,
+	)
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/openai/v1/responses", strings.NewReader(`{"model":"gpt-5.2","input":"hello","stream":false}`))
+	c.Request.Header.Set("Content-Type", "application/json")
+	c.Request.Header.Set("session_id", "session-recovery-handler")
+	c.Set(string(middleware.ContextKeyAPIKey), &service.APIKey{
+		ID: 1803, GroupID: &groupID,
+		User:  &service.User{ID: 1703, Status: service.StatusActive},
+		Group: &service.Group{ID: groupID, Platform: service.PlatformOpenAI, Status: service.StatusActive},
+	})
+	c.Set(string(middleware.ContextKeyUser), middleware.AuthSubject{UserID: 1703, Concurrency: 0})
+
+	h.Responses(c)
+
+	require.Equal(t, []int64{9910, 9910, 9910, 9911}, upstream.calls())
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Equal(t, "resp_healthy", gjson.GetBytes(rec.Body.Bytes(), "id").String())
+}

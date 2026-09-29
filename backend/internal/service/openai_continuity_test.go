@@ -269,3 +269,58 @@ func TestOpenAIContinuityWebSocketWaitTimeoutIsRetryable(t *testing.T) {
 	require.ErrorIs(t, err, context.DeadlineExceeded)
 	require.Equal(t, 1, cache.dequeued)
 }
+
+func TestOpenAIContinuityRecoveryRetriesBeforeSafeMigration(t *testing.T) {
+	group := int64(9)
+	ctx := context.WithValue(context.Background(), openAIContinuityKey{}, &openAIContinuityState{explicitSession: true})
+	accounts := []Account{
+		{ID: 1, Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Status: StatusActive, Schedulable: true, Concurrency: 1, GroupIDs: []int64{group}},
+		{ID: 2, Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Status: StatusActive, Schedulable: true, Concurrency: 1, GroupIDs: []int64{group}},
+	}
+	cache := &schedulerTestGatewayCache{sessionBindings: map[string]int64{}}
+	svc := &OpenAIGatewayService{cfg: newSchedulerTestOpenAIWSV2Config(), cache: cache, accountRepo: schedulerTestOpenAIAccountRepo{accounts: accounts},
+		rateLimitService: newOpenAIAdvancedSchedulerRateLimitService("true"), concurrencyService: NewConcurrencyService(schedulerTestConcurrencyCache{})}
+	require.NoError(t, svc.beginContinuity(ctx, &group, "s"))
+	failure := &UpstreamFailoverError{StatusCode: 502}
+	PrepareOpenAIContinuityRecovery(ctx, &accounts[1], failure)
+	require.True(t, failure.RetryableOnSameAccount)
+	require.True(t, failure.RequestScopedTransient)
+	require.Equal(t, 2, failure.SameAccountRetryMax)
+	RetryOpenAIContinuityAccount(ctx, 2)
+	retry, _, err := svc.SelectAccountWithScheduler(ctx, &group, "", "s", "gpt-5.1", nil, OpenAIUpstreamTransportAny, false)
+	require.NoError(t, err)
+	require.EqualValues(t, 2, retry.Account.ID, "retry must not pick the other account before any successful binding")
+	retry.ReleaseFunc()
+	require.Zero(t, cache.sessionBindings["openai:s"])
+	require.NoError(t, OpenAIContinuityMigrationError(ctx))
+	migrated, _, err := svc.SelectAccountWithScheduler(ctx, &group, "", "s", "gpt-5.1", map[int64]struct{}{2: {}}, OpenAIUpstreamTransportAny, false)
+	require.NoError(t, err)
+	require.EqualValues(t, 1, migrated.Account.ID)
+	require.Zero(t, cache.sessionBindings["openai:s"])
+	CompleteOpenAIContinuity(ctx, migrated.Account)
+	require.EqualValues(t, 1, cache.sessionBindings["openai:s"])
+	migrated.ReleaseFunc()
+}
+
+func TestOpenAIContinuityRecoveryPreservesUnsafeHistoryAndErrorPolicies(t *testing.T) {
+	account := &Account{Platform: PlatformOpenAI}
+	for _, status := range []int{400, 401, 403, 413, 429} {
+		ctx := context.WithValue(context.Background(), openAIContinuityKey{}, &openAIContinuityState{enabled: true, explicitSession: true, hash: "s"})
+		failure := &UpstreamFailoverError{StatusCode: status}
+		PrepareOpenAIContinuityRecovery(ctx, account, failure)
+		require.False(t, failure.RetryableOnSameAccount)
+	}
+	for _, tc := range []struct {
+		state    *openAIContinuityState
+		expected error
+	}{
+		{&openAIContinuityState{enabled: true, explicitSession: true, hash: "s", migrationUnsafe: true}, ErrOpenAIContextIncomplete},
+		{&openAIContinuityState{enabled: true, explicitSession: true, hash: "s", previousResponseID: "resp_old"}, ErrOpenAIContinuityUnavailable},
+	} {
+		ctx := context.WithValue(context.Background(), openAIContinuityKey{}, tc.state)
+		failure := &UpstreamFailoverError{StatusCode: 503}
+		PrepareOpenAIContinuityRecovery(ctx, account, failure)
+		require.True(t, failure.RetryableOnSameAccount, "retrying the original upstream is still safe")
+		require.ErrorIs(t, OpenAIContinuityMigrationError(ctx), tc.expected)
+	}
+}

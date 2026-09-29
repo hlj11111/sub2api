@@ -37,6 +37,7 @@ type dashboardSnapshotV2Response struct {
 }
 
 type dashboardSnapshotV2Filters struct {
+	SessionID             string
 	UserID                int64
 	APIKeyID              int64
 	AccountID             int64
@@ -50,6 +51,7 @@ type dashboardSnapshotV2Filters struct {
 }
 
 type dashboardSnapshotV2CacheKey struct {
+	SessionID             string `json:"session_id"`
 	StartTime             string `json:"start_time"`
 	EndTime               string `json:"end_time"`
 	Granularity           string `json:"granularity"`
@@ -97,6 +99,7 @@ func (h *DashboardHandler) GetSnapshotV2(c *gin.Context) {
 	}
 
 	keyRaw, _ := json.Marshal(dashboardSnapshotV2CacheKey{
+		SessionID:             filters.SessionID,
 		StartTime:             startTime.UTC().Format(time.RFC3339),
 		EndTime:               endTime.UTC().Format(time.RFC3339),
 		Granularity:           granularity,
@@ -192,6 +195,7 @@ func (h *DashboardHandler) buildSnapshotV2Response(
 			filters.NativeCompactionV2,
 			filters.BillingType,
 			filters.UpstreamModelMismatch,
+			filters.SessionID,
 		)
 		if err != nil {
 			return nil, errors.New("failed to get usage trend")
@@ -214,6 +218,7 @@ func (h *DashboardHandler) buildSnapshotV2Response(
 			filters.NativeCompactionV2,
 			filters.BillingType,
 			filters.UpstreamModelMismatch,
+			filters.SessionID,
 		)
 		if err != nil {
 			return nil, errors.New("failed to get model statistics")
@@ -235,6 +240,7 @@ func (h *DashboardHandler) buildSnapshotV2Response(
 			filters.NativeCompactionV2,
 			filters.BillingType,
 			filters.UpstreamModelMismatch,
+			filters.SessionID,
 		)
 		if err != nil {
 			return nil, errors.New("failed to get group statistics")
@@ -255,7 +261,8 @@ func (h *DashboardHandler) buildSnapshotV2Response(
 
 func parseDashboardSnapshotV2Filters(c *gin.Context) (*dashboardSnapshotV2Filters, error) {
 	filters := &dashboardSnapshotV2Filters{
-		Model: strings.TrimSpace(c.Query("model")),
+		SessionID: strings.TrimSpace(c.Query("session_id")),
+		Model:     strings.TrimSpace(c.Query("model")),
 	}
 
 	if userIDStr := strings.TrimSpace(c.Query("user_id")); userIDStr != "" {
