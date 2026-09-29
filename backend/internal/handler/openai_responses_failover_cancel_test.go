@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	middleware2 "github.com/Wei-Shaw/sub2api/internal/server/middleware"
@@ -82,6 +83,7 @@ func newOpenAIResponsesFailoverTestHandlerWithCache(t *testing.T, upstream servi
 	}
 	accountRepo := openAIImagesFailoverAccountRepo{accounts: accounts}
 	cfg := &config.Config{RunMode: config.RunModeSimple}
+	cfg.Gateway.Scheduling.StickySessionWaitTimeout = 8 * time.Second
 	gatewayService := service.NewOpenAIGatewayService(
 		accountRepo,
 		nil,

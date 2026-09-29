@@ -563,13 +563,19 @@ func (s *OpenAIGatewayService) AcquireOpenAIWebSocketAccountSlot(ctx context.Con
 // failure policies retain precedence; authentication/payload errors never opt in.
 func PrepareOpenAIContinuityRecovery(ctx context.Context, account *Account, failure *UpstreamFailoverError) {
 	st := continuityState(ctx)
-	if st != nil && st.balanced && failure != nil {
+	if st != nil && st.balanced && failure != nil && account != nil {
 		st.mu.Lock()
 		if st.recoveryDeadline.IsZero() {
 			st.recoveryDeadline = time.Now().Add(openAIBalancedRecoveryWindow)
 		}
 		if failure.SameAccountRetryDeadline.IsZero() || failure.SameAccountRetryDeadline.After(st.recoveryDeadline) {
 			failure.SameAccountRetryDeadline = st.recoveryDeadline
+		}
+		// A deadline alone opts the shared retry helper out of its count limit.
+		// Keep a hard cap as well, including explicit zero-account retry policy
+		// (the handler's effective limit remains zero in that case).
+		if failure.SameAccountRetryMax <= 0 {
+			failure.SameAccountRetryMax = max(1, account.GetPoolModeRetryCount())
 		}
 		st.mu.Unlock()
 	}

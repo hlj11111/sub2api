@@ -77,8 +77,8 @@ func TestOpenAIHandleStreamingAwareError_ResponsesStreamingEmitsResponseFailed(t
 
 	id, _ := resp["id"].(string)
 	assert.True(t, strings.HasPrefix(id, "resp_"), "id should start with resp_, got %q", id)
-	assert.Equal(t, "rate_limit_exceeded", errObj["code"])
-	assert.Equal(t, "Concurrency limit exceeded for user, please retry later", errObj["message"])
+	assert.Equal(t, "gateway_concurrency_limit", errObj["code"])
+	assert.Equal(t, "本地用户并发已满，请稍后重试", errObj["message"])
 }
 
 func TestOpenAIAdmissionError_SynchronousNonResponsesIncludesGatewayCode(t *testing.T) {
@@ -316,7 +316,7 @@ func TestOpenAIHandleStreamingAwareError_BareResponsesRouteEmitsResponseFailed(t
 	resp, errObj := parseResponsesFailedSSE(t, w.Body.String())
 	id, _ := resp["id"].(string)
 	assert.True(t, strings.HasPrefix(id, "resp_"))
-	assert.Equal(t, "rate_limit_exceeded", errObj["code"])
+	assert.Equal(t, "gateway_concurrency_limit", errObj["code"])
 }
 
 // issue #7128：grok-build 把顶层 sequence_number 当必填，合成的 response.failed

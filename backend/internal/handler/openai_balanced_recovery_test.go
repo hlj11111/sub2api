@@ -89,10 +89,10 @@ func TestContinuityErrorsAreChineseTypedAndPreservedInSSE(t *testing.T) {
 		if streaming {
 			_, detail := parseResponsesFailedSSE(t, rec.Body.String())
 			code, _ = detail["code"].(string)
-			kind, _ = detail["type"].(string)
 			message, _ = detail["message"].(string)
 			marked, ok := service.GetOpsStreamError(c)
 			require.True(t, ok)
+			kind = marked.ErrType
 			require.Equal(t, "LOCAL_SESSION_REPLAY_INCOMPLETE", marked.Code)
 		} else {
 			code = gjson.GetBytes(rec.Body.Bytes(), "error.code").String()
@@ -132,4 +132,24 @@ func TestOpenAIClientErrorHasDistinctUpstreamAndLocalCodes(t *testing.T) {
 	_, code, msg := openAIClientError("upstream_error", "provider_custom", "custom provider detail")
 	require.Equal(t, "provider_custom", code)
 	require.Equal(t, "custom provider detail", msg)
+}
+
+func TestBalancedRecoveryWindowNeverOverridesConfiguredRetryCount(t *testing.T) {
+	for _, limit := range []int{0, 1, 3} {
+		h := newOpenAIResponsesFailoverTestHandler(t, nil)
+		c, _ := newOpenAIResponsesFailoverTestContext(t, context.Background())
+		h.gatewayService.GenerateSessionHash(c, []byte(`{"input":"hello"}`))
+		finish := service.ManageOpenAIResponsesContinuity(c.Request.Context(), []byte(`{"input":"hello"}`), true)
+		account := &service.Account{Platform: service.PlatformOpenAI, Type: service.AccountTypeAPIKey,
+			Credentials: map[string]any{"pool_mode": true, "pool_mode_retry_count": limit}}
+		failure := &service.UpstreamFailoverError{StatusCode: 503, RetryableOnSameAccount: true}
+		service.PrepareOpenAIContinuityRecovery(c.Request.Context(), account, failure)
+		require.False(t, failure.SameAccountRetryDeadline.IsZero())
+		effective := effectiveSameAccountRetryLimit(failure, account)
+		require.False(t, sameAccountRetryAllowed(failure, limit, effective), "deadline must not increase retry count")
+		if limit > 0 {
+			require.True(t, sameAccountRetryAllowed(failure, limit-1, effective))
+		}
+		finish()
+	}
 }

@@ -340,7 +340,7 @@ func TestOpenAIEnsureForwardErrorResponse_ResponsesRouteAfterWrittenEmitsRespons
 	assert.Contains(t, body, ":\n\n", "earlier ping bytes preserved")
 	assert.Contains(t, body, "event: response.failed\n", "appended a Responses terminal event")
 	assert.Contains(t, body, `"type":"response.failed"`)
-	assert.Contains(t, body, `"code":"upstream_error"`)
+	assert.Contains(t, body, `"code":"UPSTREAM_REQUEST_FAILED"`)
 	assert.Contains(t, body, "上游请求失败，请稍后在当前会话重试")
 }
 
