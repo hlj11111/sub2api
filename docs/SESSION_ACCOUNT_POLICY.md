@@ -111,3 +111,40 @@ WebSocket 和其他协议保留现有恢复策略。
 
 新增回归覆盖 Redis TTL/清空/断连、进程重建、陈旧缓存、数据库故障、过期租约、并发
 恢复、迟到提交、历史用户/分组隔离，以及恢复后的撤权和不可调度保护。
+
+### Responses HTTP 均衡恢复
+
+普通 OpenAI Responses HTTP 请求启用均衡恢复，压缩请求、生图和 WebSocket 保留原有策略。
+原账号正常时原样保留推理密文；原账号短暂冷却最多等待 8 秒，明确超过恢复窗口的冷却
+不空等。并发等待也受 8 秒上限约束。原有上游超时仍然生效；8 秒不是整个生成请求的超时。
+
+只有请求不带 previous_response_id / conversation，输入从可读用户消息开始、包含历史
+助手消息或已完成的工具调用，而且工具调用与结果按 ID 完整配对，才允许在原渠道不可用时
+删除辅助 reasoning 密文条目并在备用渠道重放。其余消息、工具参数和结果保持不变。
+这属于结构检查，不能证明客户端没有省略普通消息；不会从服务端存储重建正文。
+压缩历史 compaction、文件/容器/向量库/条目引用、未完成工具调用和未知输入类型不能使用
+这条降级路径。仅删除密文无法恢复压缩掉的内容，因此不能这么处理 compaction。
+
+每个请求最多尝试一个备用账号（同账号的既有有界重试仍适用），成功后才提交新归属。
+备用账号失败不会继续逐个试号；本轮已输出实际内容或客户端已断开时不自动重放。
+历史归属缺失但请求满足上述结构检查时，也只允许一次恢复尝试。权限和模型等调度条件
+始终生效；去掉隐藏推理可能影响连贯性和缓存命中，但不会主动删除可见消息或工具结果。
+
+HTTP 请求的租约由 handler 生命周期收尾，成功提交之前不会仅因客户端收到终止事件后
+断开而提前释放；失败请求结束仍释放占用，不确认新的归属。数据库租约到期、存储故障或
+较新请求取得租约后，迟到请求仍不能覆盖新归属。
+
+对客提示优先中文，稳定 code 保留英文供程序判断。会话错误 type 区分
+local_validation_error（本地历史/资源校验）、local_permission_error（本地权限）、
+local_state_error（本地存储/租约）、local_routing_error（本地路由/恢复预算）。
+具体 code 包括 LOCAL_SESSION_BINDING_MISSING、LOCAL_RESPONSE_OWNER_MISSING、
+LOCAL_SESSION_ENCRYPTED_HISTORY、LOCAL_SESSION_COMPACTED_HISTORY、
+LOCAL_SESSION_TOOL_CONTEXT_MISSING、LOCAL_SESSION_RESOURCE_BOUND、
+LOCAL_SESSION_STORE_UNAVAILABLE、LOCAL_SESSION_LEASE_LOST、LOCAL_SESSION_RECOVERY_EXHAUSTED。
+上游通用错误使用 UPSTREAM_AUTHENTICATION_FAILED / UPSTREAM_ACCESS_FORBIDDEN /
+UPSTREAM_RATE_LIMITED / UPSTREAM_OVERLOADED / UPSTREAM_UNAVAILABLE / UPSTREAM_REQUEST_FAILED。
+标准 upstream_error、rate_limit_error 等类型继续兼容客户端；code 可区分本地和上游限流。
+普通 JSON 与 response.failed SSE 均携带 code；Ops 保留最终本地拒绝的归因，并附带此前
+实际发生的上游失败尝试。第三方原始错误和管理员自定义透传提示不强行翻译。
+
+本阶段不保存聊天正文、不新增数据库迁移；依赖前一版的 243 会话归属迁移。

@@ -609,6 +609,9 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 
 	// Generate session hash (header first; fallback to prompt_cache_key)
 	sessionHash := h.gatewayService.GenerateSessionHash(c, sessionHashBody)
+	finishContinuity := service.ManageOpenAIResponsesContinuity(c.Request.Context(), sessionHashBody,
+		requestPlatform == service.PlatformOpenAI && !legacyCompact && !nativeV2 && !imageIntent)
+	defer finishContinuity()
 	if h.rejectIfCyberSessionBlocked(c, apiKey, sessionHashBody, reqModel, cyberBlockFormatResponses) {
 		return
 	}
@@ -3600,6 +3603,7 @@ func (h *OpenAIGatewayHandler) handleStreamingAwareErrorWithCode(
 	streamStarted bool,
 	countTowardsSLA bool,
 ) {
+	errType, code, message = openAIClientError(errType, code, message)
 	// body-signal compact 心跳可能已把响应头提交为 200：先停心跳（建立
 	// happens-before，接管 ResponseWriter），并升级为流内错误处理。
 	if service.StopOpenAICompactSSEKeepaliveCommitted(c) {
@@ -3609,7 +3613,7 @@ func (h *OpenAIGatewayHandler) handleStreamingAwareErrorWithCode(
 		if countTowardsSLA {
 			service.MarkOpsStreamFailure(c, errType, code, message, status)
 		} else {
-			service.MarkOpsStreamError(c, errType, message, status)
+			service.MarkOpsStreamErrorValue(c, service.OpsStreamError{ErrType: errType, Code: code, Message: message, IntendedStatus: status})
 		}
 		// /v1/responses 的严格 SDK（Codex CLI）要求终止事件必须属于
 		// response.completed/failed/incomplete/cancelled 集合。
@@ -3783,13 +3787,18 @@ func openAIFirstOutputFailoverExhausted(failoverErr *service.UpstreamFailoverErr
 
 // errorResponse returns OpenAI API format error response
 func (h *OpenAIGatewayHandler) errorResponse(c *gin.Context, status int, errType, message string) {
+	errType, code, message := openAIClientError(errType, "", message)
 	// body-signal compact 心跳可能已把响应头提交为 200：JSON 错误体会与已
 	// 提交的 SSE 流交错，必须降级为 response.failed 终止事件（#3887）。
 	if service.StopOpenAICompactSSEKeepaliveCommitted(c) {
 		service.MarkOpsStreamError(c, errType, message, status)
-		if writeResponsesFailedSSE(c, errType, "", message) {
+		if writeResponsesFailedSSE(c, errType, code, message) {
 			return
 		}
+	}
+	if code != "" {
+		c.JSON(status, gin.H{"error": gin.H{"type": errType, "code": code, "message": message}})
+		return
 	}
 	c.JSON(status, gin.H{
 		"error": gin.H{
@@ -4404,7 +4413,8 @@ func summarizeWSCloseErrorForLog(err error) (string, string) {
 func (h *OpenAIGatewayHandler) handleContinuitySelectionError(c *gin.Context, err error, started bool) bool {
 	for _, item := range []*infraerrors.ApplicationError{service.ErrOpenAIContextIncomplete, service.ErrOpenAIContinuityUnavailable, service.ErrAccountAccessDenied, service.ErrAccountPolicyUnavailable, service.ErrAllowedAccountsUnavailable} {
 		if errors.Is(err, item) {
-			h.handleStreamingAwareError(c, int(item.Code), item.Reason, item.Message, started)
+			detail := infraerrors.FromError(err)
+			h.handleStreamingAwareErrorWithCode(c, int(detail.Code), service.OpenAIContinuityErrorType(detail.Reason), detail.Reason, detail.Message, started, false)
 			return true
 		}
 	}

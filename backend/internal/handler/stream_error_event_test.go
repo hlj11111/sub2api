@@ -185,7 +185,7 @@ func TestOpenAIHandleStreamingAwareError_ResponsesStreamingJSONEscaping(t *testi
 		{"反斜杠", "server_error", `path C:\Users\test\file.txt not found`},
 		{"双引号+反斜杠", "upstream_error", `error parsing "key\value": unexpected token`},
 		{"换行与制表", "server_error", "line1\nline2\ttab"},
-		{"普通", "upstream_error", "Upstream service temporarily unavailable"},
+		{"普通", "upstream_error", "上游服务暂时不可用，请稍后在当前会话重试"},
 	}
 
 	for _, tc := range cases {

@@ -51,6 +51,11 @@ func (u *openAIResponsesFailoverCancelUpstream) calls() []int64 {
 
 func newOpenAIResponsesFailoverTestHandler(t *testing.T, upstream service.HTTPUpstream) *OpenAIGatewayHandler {
 	t.Helper()
+	return newOpenAIResponsesFailoverTestHandlerWithCache(t, upstream, nil)
+}
+
+func newOpenAIResponsesFailoverTestHandlerWithCache(t *testing.T, upstream service.HTTPUpstream, cache service.GatewayCache) *OpenAIGatewayHandler {
+	t.Helper()
 	accounts := []service.Account{
 		{
 			ID:          1,
@@ -84,7 +89,7 @@ func newOpenAIResponsesFailoverTestHandler(t *testing.T, upstream service.HTTPUp
 		nil,
 		nil,
 		nil,
-		nil,
+		cache,
 		cfg,
 		nil,
 		nil,

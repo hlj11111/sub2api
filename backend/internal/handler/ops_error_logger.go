@@ -1335,7 +1335,9 @@ func logOpsRecoveredUpstream(c *gin.Context, ops *service.OpsService, finalStatu
 	entry.IsCountTokens = isCountTokensRequest(c)
 	entry.CreatedAt = time.Now()
 	entry.ErrorMessage = "Recovered upstream error"
-	if lastStage == string(service.GatewayFailureStageAccountAuth) {
+	if _, local := classifyOpsLocalGatewayError(streamErr.ErrType, streamErr.Code); local {
+		// The final local rejection retains its own source; attempts remain attached.
+	} else if lastStage == string(service.GatewayFailureStageAccountAuth) {
 		entry.ErrorPhase = string(service.GatewayFailureStageAccountAuth)
 		entry.ErrorMessage = "Recovered account authentication failure"
 	} else if lastStatus > 0 {
@@ -2127,7 +2129,8 @@ func guessPlatformFromPath(path string) string {
 // classification if accepted blindly.
 func isKnownOpsErrorType(t string) bool {
 	switch t {
-	case "invalid_request_error",
+	case "local_validation_error", "local_permission_error", "local_routing_error", "local_state_error",
+		"invalid_request_error",
 		"authentication_error",
 		"permission_error",
 		"model_not_found",
@@ -2213,6 +2216,9 @@ func classifyOpsSeverity(errType string, status int) string {
 }
 
 func classifyOpsErrorLog(c *gin.Context, errType, message, code string, status int) (phase string, isBusinessLimited bool, errorOwner string, errorSource string) {
+	if localPhase, local := classifyOpsLocalGatewayError(errType, code); local {
+		return localPhase, localPhase == "request" || localPhase == "auth", "gateway", "gateway"
+	}
 	phase = classifyOpsPhase(errType, message, code)
 	routingCapacityLimited := isOpsRoutingCapacityLimited(c)
 	clientBusinessLimited := service.HasOpsClientBusinessLimited(c)
@@ -2513,4 +2519,32 @@ func shouldSkipOpsClientClosed(c *gin.Context, ops *service.OpsService, status i
 // 统一落一条 status=403 的错误请求，故中间件跳过自身落库，避免双写。
 func shouldSkipOpsErrorLogForCyber(c *gin.Context) bool {
 	return service.GetOpsCyberPolicy(c) != nil
+}
+
+// A failed upstream attempt may precede a local replay rejection. Keep both,
+// but never relabel the final local check as an upstream rejection.
+func classifyOpsLocalGatewayError(errType, code string) (string, bool) {
+	switch errType {
+	case "local_validation_error":
+		return "request", true
+	case "local_permission_error":
+		return "auth", true
+	case "local_routing_error":
+		return "routing", true
+	case "local_state_error":
+		return "internal", true
+	}
+	if !strings.HasPrefix(code, "LOCAL_") {
+		return "", false
+	}
+	switch {
+	case strings.HasPrefix(code, "LOCAL_API_KEY"):
+		return "auth", true
+	case strings.HasPrefix(code, "LOCAL_NO_AVAILABLE"), code == "LOCAL_ALL_ACCOUNTS_COOLDOWN", code == "LOCAL_COMPACT_UNSUPPORTED":
+		return "routing", true
+	case strings.HasPrefix(code, "LOCAL_REQUEST"):
+		return "request", true
+	default:
+		return "internal", true
+	}
 }

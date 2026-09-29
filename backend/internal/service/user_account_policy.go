@@ -10,9 +10,9 @@ import (
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 )
 
-var ErrAccountAccessDenied = infraerrors.Forbidden("ACCOUNT_ACCESS_DENIED", "The account is not permitted for this user and group")
-var ErrAccountPolicyUnavailable = infraerrors.ServiceUnavailable("ACCOUNT_POLICY_UNAVAILABLE", "Unable to verify account access")
-var ErrAllowedAccountsUnavailable = infraerrors.ServiceUnavailable("ALLOWED_ACCOUNTS_UNAVAILABLE", "No permitted accounts are currently available for this user and group")
+var ErrAccountAccessDenied = infraerrors.Forbidden("ACCOUNT_ACCESS_DENIED", "本地权限校验未通过：当前用户或分组不允许使用此渠道")
+var ErrAccountPolicyUnavailable = infraerrors.ServiceUnavailable("ACCOUNT_POLICY_UNAVAILABLE", "本地权限校验服务暂时不可用，请稍后重试")
+var ErrAllowedAccountsUnavailable = infraerrors.ServiceUnavailable("ALLOWED_ACCOUNTS_UNAVAILABLE", "本地调度失败：当前用户和分组没有可用的获准渠道")
 
 func IsAccountPolicyError(err error) bool {
 	return errors.Is(err, ErrAccountAccessDenied) || errors.Is(err, ErrAccountPolicyUnavailable) || errors.Is(err, ErrAllowedAccountsUnavailable)

@@ -1,0 +1,135 @@
+//go:build unit
+
+package handler
+
+import (
+	"context"
+	"io"
+	"net/http"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/Wei-Shaw/sub2api/internal/service"
+	"github.com/Wei-Shaw/sub2api/internal/testutil"
+	"github.com/stretchr/testify/require"
+	"github.com/tidwall/gjson"
+)
+
+type balancedRecoveryUpstream struct {
+	service.HTTPUpstream
+	accounts  []int64
+	bodies    []string
+	failFirst bool
+	failAll   bool
+}
+
+func (u *balancedRecoveryUpstream) Do(req *http.Request, _ string, accountID int64, _ int) (*http.Response, error) {
+	body, err := io.ReadAll(req.Body)
+	if err != nil {
+		return nil, err
+	}
+	u.accounts = append(u.accounts, accountID)
+	u.bodies = append(u.bodies, string(body))
+	status, payload := 200, `{"id":"resp_ok","object":"response","status":"completed","model":"gpt-5.1","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"ok"}]}],"usage":{"input_tokens":1,"output_tokens":1}}`
+	if u.failAll || (u.failFirst && len(u.accounts) == 1) {
+		status, payload = 520, `{"error":{"message":"temporary provider failure"}}`
+	}
+	return &http.Response{StatusCode: status, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(payload))}, nil
+}
+
+const balancedHandlerBody = `{"model":"gpt-5.1","stream":false,"input":[{"role":"user","content":"original question"},{"type":"reasoning","encrypted_content":"keep-on-original"},{"role":"assistant","content":"original answer"},{"role":"user","content":"next question"}]}`
+
+func TestResponsesBalancedFailoverPreservesOriginalThenDropsAuxiliaryReasoning(t *testing.T) {
+	for _, fail := range []bool{false, true} {
+		upstream := &balancedRecoveryUpstream{failFirst: fail}
+		cache := testutil.NewRedisGatewayCache(t)
+		h := newOpenAIResponsesFailoverTestHandlerWithCache(t, upstream, cache)
+		c, rec := newOpenAIResponsesFailoverTestContext(t, context.Background())
+		c.Request.Body = io.NopCloser(strings.NewReader(balancedHandlerBody))
+		c.Request.ContentLength = int64(len(balancedHandlerBody))
+		c.Request.Header.Set("session_id", "balanced-handler")
+		hash := h.gatewayService.GenerateSessionHash(c, []byte(balancedHandlerBody))
+		require.NoError(t, cache.SetSessionAccountID(c.Request.Context(), 3131, "openai:"+hash, 1, time.Hour))
+		h.Responses(c)
+		require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+		require.Contains(t, upstream.bodies[0], "keep-on-original")
+		if fail {
+			require.Equal(t, []int64{1, 2}, upstream.accounts)
+			require.NotContains(t, upstream.bodies[1], "keep-on-original")
+			for _, text := range []string{"original question", "original answer", "next question"} {
+				require.Contains(t, upstream.bodies[1], text)
+			}
+		} else {
+			require.Equal(t, []int64{1}, upstream.accounts)
+		}
+	}
+}
+
+func TestResponsesBalancedMissingBindingDoesNotFanOut(t *testing.T) {
+	upstream := &balancedRecoveryUpstream{failAll: true}
+	h := newOpenAIResponsesFailoverTestHandler(t, upstream)
+	c, rec := newOpenAIResponsesFailoverTestContext(t, context.Background())
+	c.Request.Body = io.NopCloser(strings.NewReader(balancedHandlerBody))
+	c.Request.ContentLength = int64(len(balancedHandlerBody))
+	c.Request.Header.Set("session_id", "missing-binding")
+	h.Responses(c)
+	require.Equal(t, []int64{1}, upstream.accounts, "one recovered attempt, no speculative chain")
+	require.Equal(t, http.StatusServiceUnavailable, rec.Code)
+	require.Equal(t, "LOCAL_SESSION_RECOVERY_EXHAUSTED", gjson.GetBytes(rec.Body.Bytes(), "error.code").String())
+	require.Equal(t, "local_routing_error", gjson.GetBytes(rec.Body.Bytes(), "error.type").String())
+}
+
+func TestContinuityErrorsAreChineseTypedAndPreservedInSSE(t *testing.T) {
+	for _, streaming := range []bool{false, true} {
+		c, rec := newGinContextForEndpoint(t, EndpointResponses)
+		h := &OpenAIGatewayHandler{}
+		require.True(t, h.handleContinuitySelectionError(c, service.ErrOpenAIReplayIncomplete, streaming))
+		var code, kind, message string
+		if streaming {
+			_, detail := parseResponsesFailedSSE(t, rec.Body.String())
+			code, _ = detail["code"].(string)
+			kind, _ = detail["type"].(string)
+			message, _ = detail["message"].(string)
+			marked, ok := service.GetOpsStreamError(c)
+			require.True(t, ok)
+			require.Equal(t, "LOCAL_SESSION_REPLAY_INCOMPLETE", marked.Code)
+		} else {
+			code = gjson.GetBytes(rec.Body.Bytes(), "error.code").String()
+			kind = gjson.GetBytes(rec.Body.Bytes(), "error.type").String()
+			message = gjson.GetBytes(rec.Body.Bytes(), "error.message").String()
+		}
+		require.Equal(t, "LOCAL_SESSION_REPLAY_INCOMPLETE", code)
+		require.Equal(t, "local_validation_error", kind)
+		require.Contains(t, message, "本地上下文校验未通过")
+	}
+}
+
+func TestLocalReplayRejectionIsNotMisclassifiedAsEarlierUpstreamFailure(t *testing.T) {
+	c, _ := newGinContextForEndpoint(t, EndpointResponses)
+	service.SetOpsUpstreamError(c, 503, "provider unavailable", "")
+	phase, _, owner, source := classifyOpsErrorLog(c, "local_validation_error", "本地校验未通过", "LOCAL_SESSION_REPLAY_INCOMPLETE", 409)
+	require.Equal(t, "request", phase)
+	require.Equal(t, "gateway", owner)
+	require.Equal(t, "gateway", source)
+	phase, _, owner, source = classifyOpsErrorLog(c, "upstream_error", "上游服务暂时不可用", "UPSTREAM_UNAVAILABLE", 502)
+	require.Equal(t, "upstream", phase)
+	require.Equal(t, "provider", owner)
+	require.Equal(t, "upstream_http", source)
+}
+
+func TestOpenAIClientErrorHasDistinctUpstreamAndLocalCodes(t *testing.T) {
+	for _, tc := range []struct{ input, code, text string }{
+		{"Upstream service temporarily unavailable", "UPSTREAM_UNAVAILABLE", "上游"},
+		{"Upstream rate limit exceeded, please retry later", "UPSTREAM_RATE_LIMITED", "上游"},
+		{"Failed to parse request body", "LOCAL_REQUEST_JSON_INVALID", "本地"},
+		{"No available accounts", "LOCAL_NO_AVAILABLE_ACCOUNTS", "本地"},
+	} {
+		_, code, msg := openAIClientError("api_error", "", tc.input)
+		require.Equal(t, tc.code, code)
+		require.Contains(t, msg, tc.text)
+	}
+	_, code, msg := openAIClientError("upstream_error", "provider_custom", "custom provider detail")
+	require.Equal(t, "provider_custom", code)
+	require.Equal(t, "custom provider detail", msg)
+}

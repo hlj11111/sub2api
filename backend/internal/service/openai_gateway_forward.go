@@ -23,6 +23,12 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		return nil, err
 	}
 
+	var replayErr error
+	body, replayErr = prepareOpenAIBalancedForward(ctx, account, body)
+	if replayErr != nil {
+		return nil, replayErr
+	}
+
 	defer func() {
 		if forwardErr == nil && forwardResult != nil && forwardResult.UpstreamTerminalEvent != "response.failed" && forwardResult.UpstreamTerminalEvent != "response.incomplete" {
 			CompleteOpenAIContinuity(ctx, account)

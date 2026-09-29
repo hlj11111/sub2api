@@ -19,8 +19,8 @@ import (
 	"go.uber.org/zap"
 )
 
-var ErrOpenAIContinuityUnavailable = infraerrors.ServiceUnavailable("SESSION_ACCOUNT_UNAVAILABLE", "The session account is temporarily unavailable; retry this conversation later")
-var ErrOpenAIContextIncomplete = infraerrors.Conflict("SESSION_CONTEXT_INCOMPLETE", "Cannot safely continue this conversation: the original upstream is unavailable and the request contains account-bound state or incomplete history; retry later or resend complete conversation history")
+var ErrOpenAIContinuityUnavailable = infraerrors.ServiceUnavailable("SESSION_ACCOUNT_UNAVAILABLE", "原会话渠道当前不可用，请稍后在当前会话重试")
+var ErrOpenAIContextIncomplete = infraerrors.Conflict("SESSION_CONTEXT_INCOMPLETE", "本地上下文校验未通过：原渠道不可用，当前历史无法安全跨渠道接续；请稍后重试或补发完整历史")
 
 // The lease token also acts as a fencing version: a late stream completion can
 // never overwrite a binding established by a newer request.
@@ -59,6 +59,11 @@ type openAIContinuityState struct {
 	gateway              *OpenAIGatewayService
 	stop                 chan struct{}
 	stopped              bool
+	handlerDone          chan struct{}
+	balanced             bool
+	canDropReasoning     bool
+	migrationPending     bool
+	backupAccountID      int64
 }
 
 func continuityState(ctx context.Context) *openAIContinuityState {
@@ -102,12 +107,12 @@ func (s *OpenAIGatewayService) beginContinuity(ctx context.Context, groupID *int
 		return nil
 	}
 	st.cache, st.owner, st.stop = cache, uuid.NewString(), make(chan struct{})
-	waitCtx, cancel := context.WithTimeout(ctx, s.schedulingConfig().StickySessionWaitTimeout)
+	waitCtx, cancel := context.WithTimeout(ctx, s.continuityRecoveryWindow(ctx))
 	defer cancel()
 	for {
 		acquired, err := cache.AcquireContinuityLease(waitCtx, st.groupID, s.openAISessionCacheKey(hash), st.owner, 30*time.Second)
 		if err != nil {
-			return ErrOpenAIContinuityUnavailable.WithCause(err)
+			return continuityLocalStateError("LOCAL_SESSION_STORE_UNAVAILABLE", "本地会话存储暂时不可用，请稍后重试", err)
 		}
 		if acquired {
 			st.initialized = true
@@ -117,11 +122,17 @@ func (s *OpenAIGatewayService) beginContinuity(ctx context.Context, groupID *int
 		select {
 		case <-waitCtx.Done():
 			timer.Stop()
-			return ErrOpenAIContinuityUnavailable
+			return continuityLocalStateError("LOCAL_SESSION_LEASE_BUSY", "本地会话仍有请求处理中，请稍后重试", waitCtx.Err())
 		case <-timer.C:
 		}
 	}
 	owner, group, done := st.owner, st.groupID, st.stop
+	lifetimeDone := ctx.Done()
+	renewalBase := ctx
+	if st.handlerDone != nil {
+		lifetimeDone = st.handlerDone
+		renewalBase = context.WithoutCancel(ctx)
+	}
 	go func() {
 		ticker := time.NewTicker(10 * time.Second)
 		defer ticker.Stop()
@@ -132,12 +143,14 @@ func (s *OpenAIGatewayService) beginContinuity(ctx context.Context, groupID *int
 		}()
 		for {
 			select {
-			case <-ctx.Done():
+			case <-lifetimeDone:
 				return
 			case <-done:
 				return
 			case <-ticker.C:
-				renewed, err := cache.RenewContinuityLease(ctx, group, s.openAISessionCacheKey(hash), owner, 30*time.Second)
+				renewCtx, renewCancel := context.WithTimeout(renewalBase, 3*time.Second)
+				renewed, err := cache.RenewContinuityLease(renewCtx, group, s.openAISessionCacheKey(hash), owner, 30*time.Second)
+				renewCancel()
 				if err != nil || !renewed {
 					return
 				}
@@ -242,16 +255,16 @@ func (s *OpenAIGatewayService) selectContinuityAccount(ctx context.Context, req 
 		accountID, err = s.getStickySessionAccountID(ctx, req.GroupID, req.SessionHash)
 	}
 	if err != nil && !errors.Is(err, ErrStickySessionNotFound) {
-		return nil, decision, true, ErrOpenAIContinuityUnavailable.WithCause(err)
+		return nil, decision, true, continuityLocalStateError("LOCAL_SESSION_STORE_UNAVAILABLE", "本地会话归属查询失败，请稍后重试", err)
 	}
 	if accountID <= 0 {
-		if st := continuityState(ctx); st != nil && st.migrationUnsafe {
+		if st := continuityState(ctx); st != nil && st.migrationUnsafe && !allowOpenAIBalancedMigration(ctx) {
 			return nil, decision, true, openAIContextIncomplete(ctx, "session_binding_missing", 0)
 		}
 		return nil, decision, false, nil
 	}
 	if err := CheckAccountAccess(ctx, accountID, req.GroupID); err != nil {
-		if !errors.Is(err, ErrAccountAccessDenied) || continuityState(ctx).migrationUnsafe {
+		if !errors.Is(err, ErrAccountAccessDenied) || (continuityState(ctx).migrationUnsafe && !allowOpenAIBalancedMigration(ctx)) {
 			return nil, decision, true, err
 		}
 		// A portable request may migrate after revocation, but only through the
@@ -267,12 +280,18 @@ func (s *OpenAIGatewayService) selectContinuityAccount(ctx context.Context, req 
 		return nil, decision, true, err
 	}
 	if selection != nil && selection.Account != nil {
+		if selection.WaitPlan != nil && continuityState(ctx).balanced {
+			selection.WaitPlan.Timeout = min(selection.WaitPlan.Timeout, s.continuityRecoveryWindow(ctx))
+		}
 		decision.Layer, decision.StickySessionHit, decision.SelectedAccountID, decision.SelectedAccountType = openAIAccountScheduleLayerSessionSticky, true, selection.Account.ID, selection.Account.Type
 		slog.Debug("session_binding_hit", "account_id", accountID, "group_id", derefGroupID(req.GroupID), "waiting", selection.WaitPlan != nil)
 		return selection, decision, true, nil
 	}
-	if st := continuityState(ctx); st != nil && st.migrationUnsafe {
+	if st := continuityState(ctx); st != nil && st.migrationUnsafe && !allowOpenAIBalancedMigration(ctx) {
 		return nil, decision, true, openAIContextIncomplete(ctx, "bound_account_not_selectable", accountID)
+	}
+	if st := continuityState(ctx); st != nil && st.balanced && !allowOpenAIBalancedMigration(ctx) {
+		return nil, decision, true, ErrOpenAIRecoveryExhausted
 	}
 	// No upstream history reference: the protocol's request carries its context.
 	// The old binding is kept until a replacement turn succeeds.
@@ -287,7 +306,7 @@ func (s *OpenAIGatewayService) waitForContinuityRecovery(ctx context.Context, ac
 	if _, excluded := req.ExcludedIDs[accountID]; excluded {
 		return nil
 	}
-	deadline := time.Now().Add(s.schedulingConfig().StickySessionWaitTimeout)
+	deadline := time.Now().Add(s.continuityRecoveryWindow(ctx))
 	logged := false
 	for {
 		if err := CheckAccountAccess(ctx, accountID, req.GroupID); err != nil {
@@ -304,6 +323,14 @@ func (s *OpenAIGatewayService) waitForContinuityRecovery(ctx context.Context, ac
 		candidate.RateLimitResetAt, candidate.OverloadUntil, candidate.TempUnschedulableUntil = nil, nil, nil
 		if !candidate.IsSchedulable() || !candidate.IsModelSupported(req.RequestedModel) || !s.openAIAccountMatchesSchedulingGroup(a, req.GroupID) {
 			return nil
+		}
+		if st := continuityState(ctx); st != nil && st.balanced {
+			// A reset after this request's recovery budget cannot be helped by waiting.
+			for _, until := range []*time.Time{a.RateLimitResetAt, a.OverloadUntil, a.TempUnschedulableUntil} {
+				if until != nil && until.After(deadline) {
+					return nil
+				}
+			}
 		}
 		remaining := time.Until(deadline)
 		if remaining <= 0 {
@@ -348,7 +375,7 @@ func checkOpenAIContinuityBeforeForward(ctx context.Context, account *Account) e
 	defer st.mu.Unlock()
 	ok, err := st.cache.CheckContinuityBinding(ctx, st.groupID, st.gateway.openAISessionCacheKey(st.hash), st.owner, account.ID)
 	if err != nil || !ok {
-		return ErrOpenAIContinuityUnavailable
+		return continuityLocalStateError("LOCAL_SESSION_LEASE_LOST", "本地会话占用已失效，请重试当前会话", err)
 	}
 	return nil
 }
@@ -358,12 +385,14 @@ func checkOpenAIContinuityBeforeForward(ctx context.Context, account *Account) e
 // logged, never opaque IDs or request content. All callers retain the same public
 // error and routing policy.
 func openAIContextIncomplete(ctx context.Context, reason string, accountID int64) error {
+	stateReason := ""
 	fields := []zap.Field{zap.String("reason", reason), zap.String("error_code", ErrOpenAIContextIncomplete.Reason)}
 	if accountID > 0 {
 		fields = append(fields, zap.Int64("account_id", accountID))
 	}
 	if st := continuityState(ctx); st != nil {
 		st.mu.Lock()
+		stateReason = st.nonPortableReason
 		fields = append(fields,
 			zap.Int64("group_id", st.groupID),
 			zap.String("session_hash", st.hash),
@@ -374,7 +403,7 @@ func openAIContextIncomplete(ctx context.Context, reason string, accountID int64
 		st.mu.Unlock()
 	}
 	logger.FromContext(ctx).Warn("openai.session_context_incomplete", fields...)
-	return ErrOpenAIContextIncomplete
+	return continuityContextError(reason, stateReason)
 }
 
 func openAIRequestHasNonPortableState(body []byte) bool {
@@ -386,6 +415,11 @@ func openAIRequestHasNonPortableState(body []byte) bool {
 // The mere presence of tool call pairs cannot prove ordinary history completeness.
 func openAIRequestNonPortableReason(body []byte) string {
 	body = []byte(openAIRequestPayloadView(body).Raw)
+	for _, item := range gjson.GetBytes(body, "input").Array() {
+		if item.Get("type").String() == "compaction" {
+			return "compaction"
+		}
+	}
 	coverage := AnalyzeToolCallOutputContextCoverageBytes(body)
 	if coverage.HasFunctionCallOutput && !coverage.ContextCoversAllCallIDs {
 		return "unmatched_tool_output"
@@ -451,10 +485,13 @@ func ClaimOpenAIContinuityWaitMigration(ctx context.Context) bool {
 	}
 	st.mu.Lock()
 	defer st.mu.Unlock()
-	if !st.enabled || st.migrationUnsafe || st.previousResponseID != "" || st.waitMigrationClaimed {
+	if !st.enabled || st.previousResponseID != "" || st.waitMigrationClaimed || (st.migrationUnsafe && !st.allowBalancedMigration()) || (st.balanced && st.backupAccountID != 0) {
 		return false
 	}
 	st.waitMigrationClaimed = true
+	if st.balanced {
+		st.migrationPending = true
+	}
 	return true
 }
 
@@ -545,7 +582,15 @@ func OpenAIContinuityMigrationError(ctx context.Context) error {
 	if st := continuityState(ctx); st != nil && st.enabled {
 		st.mu.Lock()
 		previousResponseID, migrationUnsafe := st.previousResponseID, st.migrationUnsafe
+		balanced, backup := st.balanced, st.backupAccountID
+		allowed := st.allowBalancedMigration()
 		st.mu.Unlock()
+		if balanced && backup != 0 {
+			return ErrOpenAIRecoveryExhausted
+		}
+		if allowed {
+			return nil
+		}
 		if previousResponseID != "" {
 			return ErrOpenAIContinuityUnavailable
 		}
