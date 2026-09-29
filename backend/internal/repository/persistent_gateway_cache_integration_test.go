@@ -77,6 +77,9 @@ func TestPersistentContinuityFencesExpiredAndLateCompletions(t *testing.T) {
 	ok, err := c.AcquireContinuityLease(ctx, 0, key, "old", time.Minute)
 	require.NoError(t, err)
 	require.True(t, ok)
+	ok, err = c.RenewContinuityLease(ctx, 0, key, "old", time.Minute)
+	require.NoError(t, err)
+	require.True(t, ok)
 	user, hash, _ := persistentOpenAISession(key)
 	_, err = integrationDB.ExecContext(ctx, `UPDATE openai_session_bindings
 		SET lease_expires_at=clock_timestamp()-interval '1 second' WHERE user_id=$1 AND session_hash=$2`, user, hash)
@@ -101,6 +104,12 @@ func TestPersistentContinuityFencesExpiredAndLateCompletions(t *testing.T) {
 	ok, err = c.CommitContinuityBinding(ctx, 0, key, "new", 202, time.Hour)
 	require.NoError(t, err)
 	require.True(t, ok)
+	ok, err = c.CommitContinuityBinding(ctx, 0, key, "new", 202, time.Hour)
+	require.NoError(t, err)
+	require.True(t, ok, "repeating the same successful commit is idempotent")
+	ok, err = c.CommitContinuityBinding(ctx, 0, key, "new", 101, time.Hour)
+	require.NoError(t, err)
+	require.False(t, ok, "idempotence cannot change the successful account")
 	ok, err = c.CommitContinuityBinding(ctx, 0, key, "old", 101, time.Hour)
 	require.NoError(t, err)
 	require.False(t, ok)
@@ -202,4 +211,32 @@ func TestPersistentContinuityLegacyHistoryIsolation(t *testing.T) {
 	var count int
 	require.NoError(t, integrationDB.QueryRowContext(ctx, `SELECT count(*) FROM openai_session_bindings WHERE user_id=$1`, first.ID).Scan(&count))
 	require.Zero(t, count, "history lookup alone must not create a durable binding")
+}
+
+func TestPersistentContinuityBindingNamespaceIsolation(t *testing.T) {
+	c, _, firstKey := persistentContinuityFixture(t)
+	ctx := context.Background()
+	other := mustCreateUser(t, testEntClient(t), &service.User{Email: uuid.NewString() + "@example.com"})
+	_, hash, _ := persistentOpenAISession(firstKey)
+	otherKey := fmt.Sprintf("openai:u%d:%s", other.ID, hash)
+	for i, scope := range []struct {
+		key   string
+		group int64
+	}{{firstKey, 0}, {otherKey, 0}, {firstKey, 1}} {
+		owner := uuid.NewString()
+		ok, err := c.AcquireContinuityLease(ctx, scope.group, scope.key, owner, time.Minute)
+		require.NoError(t, err)
+		require.True(t, ok)
+		ok, err = c.CommitContinuityBinding(ctx, scope.group, scope.key, owner, int64(100+i), time.Hour)
+		require.NoError(t, err)
+		require.True(t, ok)
+	}
+	for i, scope := range []struct {
+		key   string
+		group int64
+	}{{firstKey, 0}, {otherKey, 0}, {firstKey, 1}} {
+		id, err := c.GetSessionAccountID(ctx, scope.group, scope.key)
+		require.NoError(t, err)
+		require.EqualValues(t, 100+i, id)
+	}
 }

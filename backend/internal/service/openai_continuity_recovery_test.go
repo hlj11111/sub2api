@@ -33,7 +33,7 @@ func TestOpenAIContinuityRecoversExpiredSessionThroughNormalGuards(t *testing.T)
 			group := int64(9)
 			cache := &continuityHistoryTestCache{
 				schedulerTestGatewayCache: &schedulerTestGatewayCache{sessionBindings: map[string]int64{}},
-				account: 1,
+				account:                   1,
 			}
 			accounts := []Account{
 				{ID: 1, Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Status: StatusActive, Schedulable: true, Concurrency: 1, GroupIDs: []int64{group}},
@@ -65,7 +65,7 @@ func TestOpenAIContinuityRecoversExpiredSessionThroughNormalGuards(t *testing.T)
 			ctx = WithUserAccountPolicy(ctx, NewUserAccountPolicyService(policy, nil), 7, &group)
 			c.Request = c.Request.WithContext(ctx)
 			svc := &OpenAIGatewayService{cfg: newSchedulerTestOpenAIWSV2Config(), cache: cache,
-				accountRepo: schedulerTestOpenAIAccountRepo{accounts: accounts},
+				accountRepo:      schedulerTestOpenAIAccountRepo{accounts: accounts},
 				rateLimitService: newOpenAIAdvancedSchedulerRateLimitService("true"), concurrencyService: NewConcurrencyService(schedulerTestConcurrencyCache{})}
 			hash := svc.GenerateSessionHash(c, []byte(`{"model":"gpt-5.1","input":[{"type":"reasoning","encrypted_content":"opaque"}]}`))
 			ctx = c.Request.Context()
@@ -93,7 +93,7 @@ func TestOpenAIContinuityRecoversExpiredSessionThroughNormalGuards(t *testing.T)
 func TestOpenAIContinuityHistoryNeverUsesDifferentIdentityOrSharedLegacyOwner(t *testing.T) {
 	cache := &continuityHistoryTestCache{
 		schedulerTestGatewayCache: &schedulerTestGatewayCache{sessionBindings: map[string]int64{"openai:unrelated": 99}},
-		account: 1,
+		account:                   1,
 	}
 	ctx := context.WithValue(context.Background(), ctxkey.UserID, int64(7))
 	ctx = context.WithValue(ctx, openAIContinuityKey{}, &openAIContinuityState{enabled: true, clientSessionID: "original"})

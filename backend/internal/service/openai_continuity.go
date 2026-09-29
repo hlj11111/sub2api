@@ -46,7 +46,7 @@ type openAIContinuityState struct {
 	enabled              bool
 	explicitSession      bool
 	clientSessionID      string // history lookup only; never logged
-	retryAccountID       int64 // request-local retry target; never commits a session binding
+	retryAccountID       int64  // request-local retry target; never commits a session binding
 	migrationUnsafe      bool
 	nonPortableReason    string // fixed diagnostic category; never request content
 	previousResponseID   string

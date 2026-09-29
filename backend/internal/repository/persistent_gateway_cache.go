@@ -74,7 +74,7 @@ func (c *persistentGatewayCache) AcquireContinuityLease(ctx context.Context, gro
 		(user_id, group_id, session_hash, lease_owner, lease_expires_at)
 		VALUES ($1,$2,$3,$4,clock_timestamp()+$5*interval '1 millisecond')
 		ON CONFLICT (user_id,group_id,session_hash) DO UPDATE SET
-		lease_owner=EXCLUDED.lease_owner, lease_expires_at=EXCLUDED.lease_expires_at, committed_owner=NULL
+		lease_owner=EXCLUDED.lease_owner, lease_expires_at=clock_timestamp()+$5*interval '1 millisecond', committed_owner=NULL
 		WHERE openai_session_bindings.lease_owner IS NULL
 		OR openai_session_bindings.lease_expires_at <= clock_timestamp()`, user, group, hash, owner, ttl.Milliseconds())
 	return continuityRowChanged(result, err)
