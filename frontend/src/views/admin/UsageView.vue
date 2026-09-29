@@ -569,7 +569,10 @@ const handleIpGeoBatchFailed = () => {
   appStore.showError(t('usage.ipGeo.batchFailed'))
 }
 const cancelExport = () => exportAbortController?.abort()
-const openCleanupDialog = () => { cleanupDialogVisible.value = true }
+const openCleanupDialog = () => {
+  if (filters.value.session_id) return
+  cleanupDialogVisible.value = true
+}
 const getRequestTypeLabel = (log: AdminUsageLog): string => {
   const requestType = resolveUsageRequestType(log)
   if (requestType === 'cyber') return t('usage.cyber')

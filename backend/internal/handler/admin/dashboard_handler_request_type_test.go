@@ -339,7 +339,11 @@ func TestDashboardSessionFiltersAndCacheIsolation(t *testing.T) {
 		for _, path := range []string{"trend", "models", "groups", "snapshot-v2"} {
 			repo.trendSession, repo.modelSession, repo.groupSession = "", "", ""
 			rec := httptest.NewRecorder()
-			router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/admin/dashboard/"+path+"?session_id="+session+"&include_stats=false&include_users_trend=false", nil))
+			querySession := session
+			if path == "snapshot-v2" {
+				querySession += "-snapshot"
+			}
+			router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/admin/dashboard/"+path+"?session_id="+querySession+"&start_date=2026-09-01&end_date=2026-09-02&include_stats=false&include_users_trend=false&include_group_stats=true", nil))
 			require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
 			if path == "trend" {
 				require.Equal(t, session, repo.trendSession)
@@ -352,6 +356,9 @@ func TestDashboardSessionFiltersAndCacheIsolation(t *testing.T) {
 			}
 			if path == "snapshot-v2" {
 				require.Contains(t, rec.Body.String(), "generated_at")
+				require.Equal(t, querySession, repo.trendSession)
+				require.Equal(t, querySession, repo.modelSession)
+				require.Equal(t, querySession, repo.groupSession)
 			}
 		}
 	}

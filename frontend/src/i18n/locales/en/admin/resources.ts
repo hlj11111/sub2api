@@ -523,6 +523,7 @@ export default {
       requestId: 'Request ID',
       sessionId: 'Session ID',
       sessionIdPlaceholder: 'Enter the full session ID (exact match)',
+      sessionCleanupUnavailable: 'Cleanup is unavailable while filtering by session. Clear the session filter first.',
       sessionIdCopied: 'Session ID copied',
       filterBySession: 'Show usage for this session',
       upstreamRequestId: 'Upstream ID',

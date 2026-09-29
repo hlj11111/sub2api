@@ -520,6 +520,7 @@ export default {
       requestId: '请求ID',
       sessionId: '会话 ID',
       sessionIdPlaceholder: '输入完整会话 ID 精确查询',
+      sessionCleanupUnavailable: '会话筛选下不支持清理，请先清除会话筛选',
       sessionIdCopied: '会话 ID 已复制',
       filterBySession: '查看此会话的使用记录',
       upstreamRequestId: '上游ID',
