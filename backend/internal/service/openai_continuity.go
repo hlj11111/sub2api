@@ -64,6 +64,13 @@ type openAIContinuityState struct {
 	canDropReasoning     bool
 	migrationPending     bool
 	backupAccountID      int64
+	backupAccounts       map[int64]struct{}
+	backupLimit          int
+	ingressBody          []byte
+	checkpointLoaded     bool
+	checkpoint           *continuityCheckpoint
+	checkpointReplay     []byte
+	checkpointOutput     []byte
 	recoveryDeadline     time.Time
 }
 
@@ -102,13 +109,14 @@ func (s *OpenAIGatewayService) beginContinuity(ctx context.Context, groupID *int
 	}
 	hash = scopedOpenAISessionHash(ctx, hash)
 	st.groupID, st.hash, st.gateway = derefGroupID(groupID), hash, s
+	st.backupLimit = s.continuityBackupLimit()
 	cache, ok := s.cache.(OpenAIContinuityCache)
 	if !ok || hash == "" {
 		st.initialized = true
 		return nil
 	}
 	st.cache, st.owner, st.stop = cache, uuid.NewString(), make(chan struct{})
-	waitCtx, cancel := context.WithTimeout(ctx, s.continuityRecoveryWindow(ctx))
+	waitCtx, cancel := context.WithTimeout(ctx, s.continuityLeaseWait(ctx))
 	defer cancel()
 	for {
 		acquired, err := cache.AcquireContinuityLease(waitCtx, st.groupID, s.openAISessionCacheKey(hash), st.owner, 30*time.Second)
@@ -177,7 +185,17 @@ func CompleteOpenAIContinuity(ctx context.Context, account *Account) {
 		return
 	}
 	if st.cache != nil {
-		ok, err := st.cache.CommitContinuityBinding(ctx, st.groupID, st.gateway.openAISessionCacheKey(st.hash), st.owner, account.ID, st.gateway.openAIWSSessionStickyTTL())
+		var ok bool
+		var err error
+		sealed, checkpointErr := st.sealedCheckpoint()
+		if checkpointErr != nil {
+			logger.FromContext(ctx).Warn("openai.session_checkpoint_encode_failed", zap.Int64("group_id", st.groupID))
+		}
+		if store, supports := st.gateway.cache.(OpenAIContinuityCheckpointStore); supports && len(sealed) > 0 {
+			ok, err = store.CommitContinuityCheckpoint(ctx, st.groupID, st.gateway.openAISessionCacheKey(st.hash), st.owner, account.ID, st.gateway.openAIWSSessionStickyTTL(), sealed, continuityCheckpointRetention)
+		} else {
+			ok, err = st.cache.CommitContinuityBinding(ctx, st.groupID, st.gateway.openAISessionCacheKey(st.hash), st.owner, account.ID, st.gateway.openAIWSSessionStickyTTL())
+		}
 		if err != nil || !ok {
 			reason := "lease_mismatch_or_expired"
 			if err != nil {
@@ -211,6 +229,7 @@ func (s *OpenAIGatewayService) selectContinuityAccount(ctx context.Context, req 
 	if err := s.beginContinuity(ctx, req.GroupID, req.SessionHash); err != nil {
 		return nil, decision, true, err
 	}
+	s.loadContinuityCheckpoint(ctx)
 	helper := &defaultOpenAIAccountScheduler{service: s, stats: newOpenAIAccountRuntimeStats()}
 	if strings.TrimSpace(req.PreviousResponseID) != "" {
 		ownerID := int64(0)
@@ -610,10 +629,10 @@ func OpenAIContinuityMigrationError(ctx context.Context) error {
 	if st := continuityState(ctx); st != nil && st.enabled {
 		st.mu.Lock()
 		previousResponseID, migrationUnsafe := st.previousResponseID, st.migrationUnsafe
-		balanced, backup := st.balanced, st.backupAccountID
+		balanced, exhausted := st.balanced, st.backupBudgetExhausted()
 		allowed := st.allowBalancedMigration()
 		st.mu.Unlock()
-		if balanced && backup != 0 {
+		if balanced && exhausted {
 			return ErrOpenAIRecoveryExhausted
 		}
 		if allowed {

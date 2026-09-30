@@ -979,6 +979,11 @@ const (
 
 // GatewayConfig API网关相关配置
 type GatewayConfig struct {
+	// Encrypted recovery checkpoints use a configured, stable TOTP root key.
+	DisableSessionRecoveryCheckpoints     bool `mapstructure:"disable_session_recovery_checkpoints"`
+	SessionRecoveryMaxBackupAccounts      int  `mapstructure:"session_recovery_max_backup_accounts"`
+	SessionRecoveryDisconnectGraceSeconds int  `mapstructure:"session_recovery_disconnect_grace_seconds"`
+	SessionRecoveryLeaseWaitSeconds       int  `mapstructure:"session_recovery_lease_wait_seconds"`
 	// 等待上游响应头的超时时间（秒），0表示无超时
 	// 注意：这不影响流式数据传输，只控制等待响应头的时间
 	ResponseHeaderTimeout int `mapstructure:"response_header_timeout"`
@@ -2435,6 +2440,10 @@ func setDefaults() {
 	viper.SetDefault("gateway.openai_compact_model", "gpt-5.5")
 	viper.SetDefault("gateway.live.max_session_duration_seconds", 3600)
 	// OpenAI Responses WebSocket（默认开启；可通过 force_http 紧急回滚）
+	viper.SetDefault("gateway.disable_session_recovery_checkpoints", false)
+	viper.SetDefault("gateway.session_recovery_max_backup_accounts", 3)
+	viper.SetDefault("gateway.session_recovery_disconnect_grace_seconds", 20)
+	viper.SetDefault("gateway.session_recovery_lease_wait_seconds", 30)
 	viper.SetDefault("gateway.openai_ws.enabled", true)
 	viper.SetDefault("gateway.openai_ws.mode_router_v2_enabled", false)
 	viper.SetDefault("gateway.openai_ws.ingress_mode_default", "ctx_pool")
@@ -2703,6 +2712,15 @@ func setEnvReachableDefaults() {
 }
 
 func (c *Config) Validate() error {
+	if c.Gateway.SessionRecoveryMaxBackupAccounts < 0 || c.Gateway.SessionRecoveryMaxBackupAccounts > 5 {
+		return fmt.Errorf("gateway.session_recovery_max_backup_accounts must be between 0 and 5")
+	}
+	if c.Gateway.SessionRecoveryDisconnectGraceSeconds < 0 || c.Gateway.SessionRecoveryDisconnectGraceSeconds > 120 {
+		return fmt.Errorf("gateway.session_recovery_disconnect_grace_seconds must be between 0 and 120")
+	}
+	if c.Gateway.SessionRecoveryLeaseWaitSeconds < 0 || c.Gateway.SessionRecoveryLeaseWaitSeconds > 120 {
+		return fmt.Errorf("gateway.session_recovery_lease_wait_seconds must be between 0 and 120")
+	}
 	forwardedClientIPHeaders, err := NormalizeForwardedClientIPHeaders(c.Security.ForwardedClientIPHeaders)
 	if err != nil {
 		return fmt.Errorf("security.forwarded_client_ip_headers: %w", err)

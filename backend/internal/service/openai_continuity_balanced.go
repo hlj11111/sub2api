@@ -27,6 +27,9 @@ func ManageOpenAIResponsesContinuity(ctx context.Context, body []byte, balanced 
 	st.mu.Lock()
 	st.handlerDone = make(chan struct{})
 	st.balanced = balanced
+	if len(body) <= continuityCheckpointMaxBytes {
+		st.ingressBody = append([]byte(nil), body...)
+	}
 	if balanced {
 		_, st.canDropReasoning = openAIBalancedReplayBody(body)
 		if !openAIBalancedToolHistoryComplete(body) {
@@ -93,6 +96,8 @@ func openAIBalancedReplayBody(body []byte) ([]byte, bool) {
 		}
 		kind := item.Get("type").String()
 		switch {
+		case kind == "compaction_trigger":
+			// This is a current-turn instruction, not opaque historical state.
 		case kind == "reasoning":
 			if item.Get("encrypted_content").String() != "" {
 				if !seenUser {
@@ -163,7 +168,7 @@ func openAIBalancedReplayBody(body []byte) ([]byte, bool) {
 
 // Caller holds st.mu. A backup is attempted only once per HTTP request.
 func (st *openAIContinuityState) allowBalancedMigration() bool {
-	if !st.balanced || st.previousResponseID != "" || st.backupAccountID != 0 {
+	if !st.balanced || st.previousResponseID != "" || st.backupBudgetExhausted() {
 		return false
 	}
 	if st.migrationUnsafe && !st.canDropReasoning {
@@ -198,7 +203,7 @@ func prepareOpenAIBalancedForward(ctx context.Context, account *Account, body []
 	}
 	st.mu.Lock()
 	defer st.mu.Unlock()
-	if st.backupAccountID != 0 && st.backupAccountID != account.ID {
+	if st.backupAccountID != account.ID && st.backupBudgetExhausted() {
 		return nil, ErrOpenAIRecoveryExhausted
 	}
 	if !st.migrationPending {
@@ -206,14 +211,50 @@ func prepareOpenAIBalancedForward(ctx context.Context, account *Account, body []
 	}
 	if st.migrationUnsafe {
 		replay, ok := openAIBalancedReplayBody(body)
+		if len(st.checkpointReplay) > 0 {
+			// Keep the current turn's root fields and replace only its input.
+			restored, err := sjson.SetRawBytes(body, "input", gjson.GetBytes(st.checkpointReplay, "input").Raw)
+			if err == nil {
+				replay, ok = portableContinuityReplay(restored)
+			}
+		}
 		if !ok {
 			return nil, ErrOpenAIReplayIncomplete
 		}
 		body = replay
 	}
 	st.backupAccountID = account.ID
+	if st.backupAccounts == nil {
+		st.backupAccounts = map[int64]struct{}{}
+	}
+	st.backupAccounts[account.ID] = struct{}{}
+	st.checkpointOutput = nil
 	logger.FromContext(ctx).Info("openai.session_balanced_replay",
 		zap.Int64("account_id", account.ID), zap.Int64("group_id", st.groupID),
 		zap.Bool("reasoning_dropped", st.migrationUnsafe))
 	return body, nil
+}
+
+// Caller holds the state lock. Same-account retries do not consume new slots.
+func (st *openAIContinuityState) backupBudgetExhausted() bool {
+	limit := st.backupLimit
+	if limit <= 0 {
+		limit = 3
+	}
+	return len(st.backupAccounts) >= limit
+}
+func (s *OpenAIGatewayService) continuityBackupLimit() int {
+	if s != nil && s.cfg != nil && s.cfg.Gateway.SessionRecoveryMaxBackupAccounts > 0 {
+		return s.cfg.Gateway.SessionRecoveryMaxBackupAccounts
+	}
+	return 3
+}
+func (s *OpenAIGatewayService) continuityLeaseWait(ctx context.Context) time.Duration {
+	if st := continuityState(ctx); st != nil && st.balanced {
+		if s.cfg != nil && s.cfg.Gateway.SessionRecoveryLeaseWaitSeconds > 0 {
+			return time.Duration(s.cfg.Gateway.SessionRecoveryLeaseWaitSeconds) * time.Second
+		}
+		return 30 * time.Second
+	}
+	return s.continuityRecoveryWindow(ctx)
 }

@@ -632,7 +632,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 	// Generate session hash (header first; fallback to prompt_cache_key)
 	sessionHash := h.gatewayService.GenerateSessionHash(c, sessionHashBody)
 	finishContinuity := service.ManageOpenAIResponsesContinuity(c.Request.Context(), sessionHashBody,
-		requestPlatform == service.PlatformOpenAI && !legacyCompact && !nativeV2 && !imageIntent)
+		requestPlatform == service.PlatformOpenAI && !imageIntent)
 	defer finishContinuity()
 	if h.rejectIfCyberSessionBlocked(c, apiKey, sessionHashBody, reqModel, cyberBlockFormatResponses) {
 		return
@@ -4495,6 +4495,9 @@ func (h *OpenAIGatewayHandler) handleContinuitySelectionError(c *gin.Context, er
 	for _, item := range []*infraerrors.ApplicationError{service.ErrOpenAIContextIncomplete, service.ErrOpenAIContinuityUnavailable, service.ErrAccountAccessDenied, service.ErrAccountPolicyUnavailable, service.ErrAllowedAccountsUnavailable} {
 		if errors.Is(err, item) {
 			detail := infraerrors.FromError(err)
+			if detail.Reason == "LOCAL_SESSION_LEASE_BUSY" {
+				c.Header("Retry-After", "3")
+			}
 			h.handleStreamingAwareErrorWithCode(c, int(detail.Code), service.OpenAIContinuityErrorType(detail.Reason), detail.Reason, detail.Message, started, false)
 			return true
 		}

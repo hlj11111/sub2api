@@ -64,6 +64,7 @@ func TestBalancedOriginalKeepsCipherAndBackupCannotFanOut(t *testing.T) {
 	hash := svc.GenerateSessionHash(c, []byte(balancedTranscript))
 	ctx := c.Request.Context()
 	defer ManageOpenAIResponsesContinuity(ctx, []byte(balancedTranscript), true)()
+	continuityState(ctx).backupLimit = 1
 	require.NoError(t, svc.beginContinuity(ctx, nil, hash))
 	original, err := prepareOpenAIBalancedForward(ctx, &Account{ID: 1}, []byte(balancedTranscript))
 	require.NoError(t, err)

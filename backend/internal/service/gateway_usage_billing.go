@@ -581,6 +581,11 @@ func detachStreamUpstreamContext(ctx context.Context, stream bool) (context.Cont
 }
 
 func detachUpstreamContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	if ctx != nil {
+		if upstream, ok := ctx.Value(continuityUpstreamLifetimeKey{}).(context.Context); ok {
+			return upstream, func() {}
+		}
+	}
 	if ctx == nil {
 		return context.Background(), func() {}
 	}

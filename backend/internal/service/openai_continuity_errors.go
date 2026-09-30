@@ -6,7 +6,7 @@ import (
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 )
 
-var ErrOpenAIRecoveryExhausted = infraerrors.ServiceUnavailable("LOCAL_SESSION_RECOVERY_EXHAUSTED", "本地恢复次数已用完：本轮已尝试备用渠道，请稍后在当前会话重试").WithCause(ErrOpenAIContinuityUnavailable)
+var ErrOpenAIRecoveryExhausted = infraerrors.ServiceUnavailable("LOCAL_SESSION_RECOVERY_EXHAUSTED", "本地恢复次数已用完：本轮备用渠道均未恢复，请稍后在当前会话重试").WithCause(ErrOpenAIContinuityUnavailable)
 var ErrOpenAIReplayIncomplete = infraerrors.Conflict("LOCAL_SESSION_REPLAY_INCOMPLETE", "本地上下文校验未通过：缺少可独立重放的完整消息或工具结果，无法安全切换渠道；请补发完整历史或稍后重试原渠道").WithCause(ErrOpenAIContextIncomplete)
 
 func continuityLocalStateError(code, message string, cause error) error {
@@ -31,7 +31,7 @@ func continuityContextError(reason, state string) error {
 		case "encrypted_content":
 			code, message = "LOCAL_SESSION_ENCRYPTED_HISTORY", "本地历史校验未通过：请求含加密历史，且无法确认可独立重放的消息和工具结果；原渠道不可用时不能安全切换"
 		case "compaction":
-			code, message = "LOCAL_SESSION_COMPACTED_HISTORY", "本地历史校验未通过：请求依赖加密压缩历史，当前没有可重建的完整历史；请稍后重试原渠道"
+			code, message = "LOCAL_SESSION_COMPACTED_HISTORY", "本地历史校验未通过：请求依赖加密压缩历史，当前没有匹配的恢复检查点；需要恢复原渠道或补发完整历史"
 		case "file_id", "file_ids", "vector_store_ids", "container_reference", "item_reference", "conversation_reference":
 			code, message = "LOCAL_SESSION_RESOURCE_BOUND", "本地资源校验未通过：请求引用原渠道的历史或资源，无法直接换渠道；请稍后重试原渠道"
 		}

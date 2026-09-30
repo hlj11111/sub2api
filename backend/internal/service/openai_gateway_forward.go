@@ -23,6 +23,13 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		return nil, err
 	}
 
+	ctx, finishDrain := s.withContinuityDrainDeadline(ctx)
+	defer finishDrain()
+	if st := continuityState(ctx); st != nil {
+		st.mu.Lock()
+		st.checkpointOutput = nil
+		st.mu.Unlock()
+	}
 	var replayErr error
 	body, replayErr = prepareOpenAIBalancedForward(ctx, account, body)
 	if replayErr != nil {
@@ -1067,7 +1074,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 	rejectedFieldRetryState := openAIResponsesRejectedFieldRetryStateForRequest(c, body)
 	for {
 		// Build upstream request
-		upstreamCtx, releaseUpstreamCtx := detachUpstreamContext(ctx)
+		upstreamCtx, releaseUpstreamCtx := detachContinuityUpstreamContext(ctx)
 		var headerGuard *openAIFirstOutputHeaderGuard
 		if firstOutputTimeout > 0 {
 			upstreamCtx, headerGuard = newOpenAIFirstOutputHeaderGuard(
