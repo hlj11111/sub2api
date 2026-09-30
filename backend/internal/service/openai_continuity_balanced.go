@@ -213,7 +213,7 @@ func prepareOpenAIBalancedForward(ctx context.Context, account *Account, body []
 		replay, ok := openAIBalancedReplayBody(body)
 		if len(st.checkpointReplay) > 0 {
 			// Keep the current turn's root fields and replace only its input.
-			restored, err := sjson.SetRawBytes(body, "input", gjson.GetBytes(st.checkpointReplay, "input").Raw)
+			restored, err := sjson.SetRawBytes(body, "input", []byte(gjson.GetBytes(st.checkpointReplay, "input").Raw))
 			if err == nil {
 				replay, ok = portableContinuityReplay(restored)
 			}
