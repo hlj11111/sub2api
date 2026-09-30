@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
@@ -114,4 +115,59 @@ func TestCompactionRecoveryRetainsToolDefinitionsAndMidHistoryUpdates(t *testing
 		require.Greater(t, updateIndex, userIndex, "reasoning updates retain their historical position")
 		require.NotContains(t, string(replay), "old instructions")
 	}
+}
+
+type modelCheckpointCache struct {
+	*balancedLeaseCache
+	sealed map[string][]byte
+}
+
+func (c *modelCheckpointCache) GetContinuityCheckpoint(_ context.Context, _ int64, key string) ([]byte, error) {
+	return c.sealed[key], nil
+}
+
+func (c *modelCheckpointCache) CommitContinuityCheckpoint(ctx context.Context, group int64, key, owner string, account int64, ttl time.Duration, sealed []byte, _ time.Duration) (bool, error) {
+	ok, err := c.CommitContinuityBinding(ctx, group, key, owner, account, ttl)
+	if ok {
+		c.sealed[key] = append([]byte(nil), sealed...)
+	}
+	return ok, err
+}
+
+func TestModelScopeReadsLegacyCheckpointAndCommitsOnlyNewScope(t *testing.T) {
+	svc := checkpointTestService()
+	cache := &modelCheckpointCache{balancedLeaseCache: &balancedLeaseCache{schedulerTestGatewayCache: &schedulerTestGatewayCache{}, released: make(chan struct{})}, sealed: map[string][]byte{}}
+	svc.cache = cache
+	c := cacheRotationContext(7)
+	c.Request.Header.Set("session-id", "old-shared-route")
+	body := []byte(`{"model":"gpt-6-astra","input":[{"type":"compaction","encrypted_content":"old-compaction"},{"role":"user","content":"continue"}]}`)
+	hash := svc.GenerateSessionHash(c, body)
+	ctx := c.Request.Context()
+	defer ManageOpenAIResponsesContinuity(ctx, body, true)()
+	require.NoError(t, svc.beginContinuity(ctx, nil, hash))
+	st := continuityState(ctx)
+	prefix, ok := visibleContinuityItems(gjson.Get(balancedTranscript, "input"))
+	require.True(t, ok)
+	digest := compactionDigest(gjson.Parse(`{"encrypted_content":"old-compaction"}`))
+	aead, err := svc.continuityCheckpointCipher()
+	require.NoError(t, err)
+	old, err := sealContinuityCheckpoint(aead, checkpointScope(st.groupID, st.legacyHash), &continuityCheckpoint{Version: 1, Prefixes: map[string][]json.RawMessage{digest: prefix}})
+	require.NoError(t, err)
+	oldKey, newKey := "openai:"+st.legacyHash, "openai:"+st.hash
+	require.NotEqual(t, oldKey, newKey)
+	cache.sealed[oldKey] = old
+	svc.loadContinuityCheckpoint(ctx)
+	require.True(t, allowOpenAIBalancedMigration(ctx))
+	replay, err := prepareOpenAIBalancedForward(ctx, &Account{ID: 2}, body)
+	require.NoError(t, err)
+	require.Contains(t, string(replay), "keep my result")
+	require.NotContains(t, string(replay), "old-compaction")
+	captureContinuityCheckpointOutput(ctx, []byte(`{"status":"completed","output":[{"type":"compaction","encrypted_content":"new-compaction"}]}`))
+	CompleteOpenAIContinuity(ctx, &Account{ID: 2})
+	require.Equal(t, old, cache.sealed[oldKey], "rollout must never overwrite the shared legacy checkpoint")
+	require.NotEmpty(t, cache.sealed[newKey])
+	_, err = openContinuityCheckpoint(aead, checkpointScope(st.groupID, st.hash), cache.sealed[newKey])
+	require.NoError(t, err)
+	_, err = openContinuityCheckpoint(aead, checkpointScope(st.groupID, st.legacyHash), cache.sealed[newKey])
+	require.Error(t, err, "new checkpoint remains bound to its model scope")
 }
