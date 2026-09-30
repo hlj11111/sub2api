@@ -38,6 +38,10 @@ type continuityCheckpoint struct {
 	// No guessed timestamp/session match and no opaque compaction is discarded.
 	Prefixes map[string][]json.RawMessage `json:"prefixes"`
 	Order    []string                     `json:"order"`
+	// Standalone /compact returns a complete window including retained messages.
+	// Match that whole window before replacing it; compaction itself is represented
+	// by a placeholder so its opaque ciphertext is not persisted here.
+	Windows map[string][]json.RawMessage `json:"windows,omitempty"`
 }
 
 func (s *OpenAIGatewayService) continuityCheckpointCipher() (cipher.AEAD, error) {
@@ -102,7 +106,7 @@ func openContinuityCheckpoint(aead cipher.AEAD, scope string, sealed []byte) (*c
 		return nil, fmt.Errorf("invalid checkpoint payload size")
 	}
 	var result continuityCheckpoint
-	if err := json.Unmarshal(plain, &result); err != nil || result.Version != 1 || len(result.Prefixes) > 4 {
+	if err := json.Unmarshal(plain, &result); err != nil || result.Version != 1 || len(result.Prefixes) > 4 || len(result.Windows) > 4 {
 		return nil, fmt.Errorf("invalid checkpoint format")
 	}
 	return &result, nil
@@ -164,20 +168,33 @@ func restoreContinuityCompaction(body []byte, checkpoint *continuityCheckpoint) 
 	}
 	var input []json.RawMessage
 	restored := false
-	for _, item := range gjson.GetBytes(body, "input").Array() {
+	items := gjson.GetBytes(body, "input").Array()
+	for i := 0; i < len(items); i++ {
+		item := items[i]
 		if item.Get("type").String() == "compaction" {
 			// Multiple independent compactions have ambiguous coverage. Fail closed.
 			if restored {
 				return nil, false
 			}
+			digest := compactionDigest(item)
+			leadingCount := len(input)
+			if window, standalone := checkpoint.Windows[digest]; standalone {
+				start, end, matched := matchContinuityWindow(items, i, window)
+				if !matched || start > len(input) {
+					return nil, false
+				}
+				leadingCount = start
+				i = end - 1
+			}
 			// Current leading system/developer messages remain authoritative.
+			input = input[:leadingCount]
 			for _, leading := range input {
 				role := gjson.GetBytes(leading, "role").String()
 				if role != "system" && role != "developer" {
 					return nil, false
 				}
 			}
-			prefix, exists := checkpoint.Prefixes[compactionDigest(item)]
+			prefix, exists := checkpoint.Prefixes[digest]
 			if !exists || len(prefix) == 0 {
 				return nil, false
 			}
@@ -208,6 +225,46 @@ func restoreContinuityCompaction(body []byte, checkpoint *continuityCheckpoint) 
 		return nil, false
 	}
 	return replay, true
+}
+
+func matchContinuityWindow(items []gjson.Result, compactionIndex int, window []json.RawMessage) (int, int, bool) {
+	compactionOffset := -1
+	for i, raw := range window {
+		if gjson.GetBytes(raw, "type").String() == "compaction" {
+			if compactionOffset >= 0 {
+				return 0, 0, false
+			}
+			compactionOffset = i
+		}
+	}
+	start := compactionIndex - compactionOffset
+	if compactionOffset < 0 || start < 0 || start+len(window) > len(items) {
+		return 0, 0, false
+	}
+	for i, raw := range window {
+		if i == compactionOffset {
+			continue // exact ciphertext digest was already used to find the window
+		}
+		if !continuityItemsEqual(raw, []byte(items[start+i].Raw)) {
+			return 0, 0, false
+		}
+	}
+	return start, start + len(window), true
+}
+
+func continuityItemsEqual(a, b []byte) bool {
+	canonical := func(raw []byte) []byte {
+		var item any
+		decoder := json.NewDecoder(bytes.NewReader(raw))
+		decoder.UseNumber()
+		if decoder.Decode(&item) != nil {
+			return nil
+		}
+		encoded, _ := json.Marshal(item)
+		return encoded
+	}
+	left, right := canonical(a), canonical(b)
+	return left != nil && right != nil && bytes.Equal(left, right)
 }
 
 // Called once after acquiring the request lease. Original ingress stays untouched
@@ -350,27 +407,60 @@ func (st *openAIContinuityState) sealedCheckpoint() ([]byte, error) {
 	if cp.Prefixes == nil {
 		cp.Prefixes = map[string][]json.RawMessage{}
 	}
-	for _, item := range gjson.ParseBytes(st.checkpointOutput).Array() {
-		if item.Get("type").String() == "compaction" {
-			digest := compactionDigest(item)
-			if digest == "" {
-				return nil, nil
+	if st.checkpointStandalone {
+		var window []json.RawMessage
+		digest := ""
+		for _, item := range gjson.ParseBytes(st.checkpointOutput).Array() {
+			if item.Get("type").String() == "compaction" {
+				if digest != "" || compactionDigest(item) == "" {
+					return nil, nil
+				}
+				digest = compactionDigest(item)
+				window = append(window, json.RawMessage(`{"type":"compaction"}`))
+			} else {
+				visible, valid := visibleContinuityItems(gjson.Parse("[" + item.Raw + "]"))
+				if !valid || len(visible) != 1 {
+					return nil, nil
+				}
+				window = append(window, visible[0])
 			}
-			if _, exists := cp.Prefixes[digest]; !exists {
-				cp.Order = append(cp.Order, digest)
-			}
-			cp.Prefixes[digest] = append([]json.RawMessage(nil), prefix...)
-			for len(cp.Order) > 4 {
-				delete(cp.Prefixes, cp.Order[0])
-				cp.Order = cp.Order[1:]
-			}
-		} else {
-			raw, valid := visibleContinuityItems(gjson.Parse("[" + item.Raw + "]"))
-			if !valid {
-				return nil, nil
-			}
-			prefix = append(prefix, raw...)
 		}
+		if digest == "" {
+			return nil, nil
+		}
+		if cp.Windows == nil {
+			cp.Windows = map[string][]json.RawMessage{}
+		}
+		if _, exists := cp.Prefixes[digest]; !exists {
+			cp.Order = append(cp.Order, digest)
+		}
+		cp.Prefixes[digest] = append([]json.RawMessage(nil), prefix...)
+		cp.Windows[digest] = window
+	} else {
+		for _, item := range gjson.ParseBytes(st.checkpointOutput).Array() {
+			if item.Get("type").String() == "compaction" {
+				digest := compactionDigest(item)
+				if digest == "" {
+					return nil, nil
+				}
+				if _, exists := cp.Prefixes[digest]; !exists {
+					cp.Order = append(cp.Order, digest)
+				}
+				cp.Prefixes[digest] = append([]json.RawMessage(nil), prefix...)
+				delete(cp.Windows, digest)
+			} else {
+				raw, valid := visibleContinuityItems(gjson.Parse("[" + item.Raw + "]"))
+				if !valid {
+					return nil, nil
+				}
+				prefix = append(prefix, raw...)
+			}
+		}
+	}
+	for len(cp.Order) > 4 {
+		delete(cp.Prefixes, cp.Order[0])
+		delete(cp.Windows, cp.Order[0])
+		cp.Order = cp.Order[1:]
 	}
 	if len(cp.Prefixes) == 0 {
 		return nil, nil

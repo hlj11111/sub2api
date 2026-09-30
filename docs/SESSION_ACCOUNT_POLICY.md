@@ -186,6 +186,10 @@ UPSTREAM_RATE_LIMITED / UPSTREAM_OVERLOADED / UPSTREAM_UNAVAILABLE / UPSTREAM_RE
 只有已成功的 Responses 终态生成具体 compaction 结果时，才把该密文的 SHA-256 摘要
 关联到压缩之前的可见历史。请求携带同一压缩结果且原渠道故障时，精确匹配后展开可见历史，
 保留当前轮消息、工具结果及 compaction_trigger，不猜测其他会话或压缩结果。
+`/responses/compact` 的输出可包含保留的旧消息；检查点同时记录其完整窗口结构，
+恢复时精确匹配整个窗口后用原可见历史替换，避免重复保留消息。窗口被改动或缺项时不强行恢复。
+这遵循 [OpenAI 官方压缩文档](https://developers.openai.com/api/docs/guides/compaction)
+对独立压缩返回完整上下文窗口的约定。
 会话绑定与加密检查点在同一个租约校验事务中提交；失效/迟到的请求不能改写两者。
 读取/解密错误不影响原渠道正常转发，但不能据此强行迁移。
 

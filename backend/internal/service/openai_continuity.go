@@ -71,6 +71,7 @@ type openAIContinuityState struct {
 	checkpoint           *continuityCheckpoint
 	checkpointReplay     []byte
 	checkpointOutput     []byte
+	checkpointStandalone bool
 	recoveryDeadline     time.Time
 }
 

@@ -28,6 +28,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 	if st := continuityState(ctx); st != nil {
 		st.mu.Lock()
 		st.checkpointOutput = nil
+		st.checkpointStandalone = isOpenAIResponsesCompactPath(c)
 		st.mu.Unlock()
 	}
 	var replayErr error

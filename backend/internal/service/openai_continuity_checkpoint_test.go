@@ -66,7 +66,7 @@ func TestContinuityCheckpointCapturedThroughResponseHandlers(t *testing.T) {
 				payload, contentType = sse, "text/event-stream"
 			}
 			resp := &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {contentType}}, Body: io.NopCloser(strings.NewReader(payload))}
-			defer resp.Body.Close()
+			defer func() { _ = resp.Body.Close() }()
 			account := &Account{ID: 1, Platform: PlatformOpenAI, Type: AccountTypeOAuth}
 			var err error
 			switch mode {
@@ -95,6 +95,35 @@ func TestContinuityCheckpointCapturedThroughResponseHandlers(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestStandaloneCompactionRecoveryMatchesWholeWindowWithoutDuplicates(t *testing.T) {
+	svc := checkpointTestService()
+	st := &openAIContinuityState{gateway: svc, hash: "u7:standalone", ingressBody: []byte(balancedTranscript), checkpointStandalone: true,
+		checkpointOutput: []byte(`[{"role":"user","content":"keep my question"},{"role":"user","content":"continue"},{"type":"compaction","encrypted_content":"standalone-result"}]`)}
+	sealed, err := st.sealedCheckpoint()
+	require.NoError(t, err)
+	require.NotEmpty(t, sealed)
+	aead, err := svc.continuityCheckpointCipher()
+	require.NoError(t, err)
+	cp, err := openContinuityCheckpoint(aead, checkpointScope(st.groupID, st.hash), sealed)
+	require.NoError(t, err)
+	// Retained user messages precede the compaction. JSON key order is immaterial.
+	body := []byte(`{"input":[{"role":"developer","content":"current instructions"},{"content":"keep my question","role":"user"},{"role":"user","content":"continue"},{"type":"compaction","encrypted_content":"standalone-result"},{"role":"user","content":"new turn"}]}`)
+	replay, ok := restoreContinuityCompaction(body, cp)
+	require.True(t, ok)
+	require.True(t, openAIBalancedToolHistoryComplete(replay))
+	for _, text := range []string{"keep my question", "keep my answer", "keep my result", "current instructions", "new turn"} {
+		require.Equal(t, 1, strings.Count(string(replay), text), "retained items must not be duplicated")
+	}
+	require.NotContains(t, string(replay), "standalone-result")
+	for _, text := range []string{"keep my question", "continue"} {
+		changed := strings.Replace(string(body), text, "changed retained item", 1)
+		_, restored := restoreContinuityCompaction([]byte(changed), cp)
+		require.False(t, restored, "a changed compacted window must not be overwritten")
+	}
+	_, ok = restoreContinuityCompaction([]byte(`{"input":[{"type":"compaction","encrypted_content":"standalone-result"},{"role":"user","content":"new turn"}]}`), cp)
+	require.False(t, ok, "missing retained messages do not establish the complete window")
 }
 
 type checkpointMemoryCache struct {
