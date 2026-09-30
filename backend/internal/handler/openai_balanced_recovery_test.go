@@ -54,7 +54,7 @@ func TestResponsesBalancedFailoverPreservesOriginalThenDropsAuxiliaryReasoning(t
 		h.Responses(c)
 		require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
 		require.Contains(t, upstream.bodies[0], "keep-on-original")
-		bound, err := cache.GetSessionAccountID(c.Request.Context(), 3131, "openai:u100:"+hash)
+		bound, err := cache.GetSessionAccountID(c.Request.Context(), 3131, "openai:"+hash)
 		require.NoError(t, err)
 		if fail {
 			require.EqualValues(t, 2, bound, "successful recovery must bind the replacement channel")
