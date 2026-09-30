@@ -3,6 +3,8 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"io"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -43,6 +45,56 @@ func TestContinuityCheckpointEncryptionScopesAndTampering(t *testing.T) {
 	aead, err = svc.continuityCheckpointCipher()
 	require.NoError(t, err)
 	require.Nil(t, aead)
+}
+
+func TestContinuityCheckpointCapturedThroughResponseHandlers(t *testing.T) {
+	const response = `{"id":"resp_compact","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"keep this decision"}]},{"type":"compaction","encrypted_content":"exact-handler-result"}],"usage":{"input_tokens":5,"output_tokens":3}}`
+	sse := "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":" + response + "}\n\n"
+	for _, mode := range []string{"json", "sse", "sse_to_json", "passthrough_json", "passthrough_sse", "passthrough_sse_to_json"} {
+		t.Run(mode, func(t *testing.T) {
+			svc := checkpointTestService()
+			svc.cfg.Gateway.MaxLineSize = defaultMaxLineSize
+			c, _ := gin.CreateTestContext(httptest.NewRecorder())
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+			c.Request.Header.Set("session-id", "handler-checkpoint")
+			hash := svc.GenerateSessionHash(c, []byte(balancedTranscript))
+			ctx := c.Request.Context()
+			defer ManageOpenAIResponsesContinuity(ctx, []byte(balancedTranscript), true)()
+			require.NoError(t, svc.beginContinuity(ctx, nil, hash))
+			payload, contentType := response, "application/json"
+			if strings.Contains(mode, "sse") {
+				payload, contentType = sse, "text/event-stream"
+			}
+			resp := &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {contentType}}, Body: io.NopCloser(strings.NewReader(payload))}
+			defer resp.Body.Close()
+			account := &Account{ID: 1, Platform: PlatformOpenAI, Type: AccountTypeOAuth}
+			var err error
+			switch mode {
+			case "json", "sse_to_json":
+				_, err = svc.handleNonStreamingResponse(ctx, resp, c, account, "gpt-5.1", "gpt-5.1")
+			case "sse":
+				_, err = svc.handleStreamingResponse(ctx, resp, c, account, time.Now(), "gpt-5.1", "gpt-5.1")
+			case "passthrough_json", "passthrough_sse_to_json":
+				_, err = svc.handleNonStreamingResponsePassthrough(ctx, resp, c, account, "gpt-5.1", "gpt-5.1")
+			case "passthrough_sse":
+				_, err = svc.handleStreamingResponsePassthrough(ctx, resp, c, account, time.Now(), "gpt-5.1", "gpt-5.1")
+			}
+			require.NoError(t, err)
+			st := continuityState(ctx)
+			sealed, err := st.sealedCheckpoint()
+			require.NoError(t, err)
+			require.NotEmpty(t, sealed)
+			aead, err := svc.continuityCheckpointCipher()
+			require.NoError(t, err)
+			cp, err := openContinuityCheckpoint(aead, checkpointScope(st.groupID, st.hash), sealed)
+			require.NoError(t, err)
+			replay, ok := restoreContinuityCompaction([]byte(`{"input":[{"type":"compaction","encrypted_content":"exact-handler-result"},{"role":"user","content":"next turn"}]}`), cp)
+			require.True(t, ok)
+			for _, text := range []string{"keep this decision", "keep my question", "keep my result", "next turn"} {
+				require.Contains(t, string(replay), text)
+			}
+		})
+	}
 }
 
 type checkpointMemoryCache struct {
