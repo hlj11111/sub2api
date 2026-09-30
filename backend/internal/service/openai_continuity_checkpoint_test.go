@@ -93,6 +93,17 @@ func TestContinuityCheckpointCapturedThroughResponseHandlers(t *testing.T) {
 			for _, text := range []string{"keep this decision", "keep my question", "keep my result", "next turn"} {
 				require.Contains(t, string(replay), text)
 			}
+			// Native input-array chaining may keep the prefix before compaction.
+			var input []json.RawMessage
+			for _, prefix := range cp.Prefixes {
+				input = append(input, prefix...)
+			}
+			input = append(input, json.RawMessage(`{"type":"compaction","encrypted_content":"exact-handler-result"}`), json.RawMessage(`{"role":"user","content":"next turn"}`))
+			unpruned, err := json.Marshal(map[string][]json.RawMessage{"input": input})
+			require.NoError(t, err)
+			unprunedReplay, ok := restoreContinuityCompaction(unpruned, cp)
+			require.True(t, ok)
+			require.JSONEq(t, string(replay), string(unprunedReplay))
 		})
 	}
 }

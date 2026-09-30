@@ -177,6 +177,10 @@ func restoreContinuityCompaction(body []byte, checkpoint *continuityCheckpoint) 
 				return nil, false
 			}
 			digest := compactionDigest(item)
+			prefix, exists := checkpoint.Prefixes[digest]
+			if !exists || len(prefix) == 0 {
+				return nil, false
+			}
 			leadingCount := len(input)
 			if window, standalone := checkpoint.Windows[digest]; standalone {
 				start, end, matched := matchContinuityWindow(items, i, window)
@@ -185,6 +189,10 @@ func restoreContinuityCompaction(body []byte, checkpoint *continuityCheckpoint) 
 				}
 				leadingCount = start
 				i = end - 1
+			} else if continuityVisiblePrefixMatches(input, prefix) {
+				// Input-array chaining may retain the exact pre-compaction history.
+				// Replace that prefix together with its compaction, without duplicates.
+				leadingCount = 0
 			}
 			// Current leading system/developer messages remain authoritative.
 			input = input[:leadingCount]
@@ -193,10 +201,6 @@ func restoreContinuityCompaction(body []byte, checkpoint *continuityCheckpoint) 
 				if role != "system" && role != "developer" {
 					return nil, false
 				}
-			}
-			prefix, exists := checkpoint.Prefixes[digest]
-			if !exists || len(prefix) == 0 {
-				return nil, false
 			}
 			if len(input) > 0 {
 				for len(prefix) > 0 {
@@ -225,6 +229,23 @@ func restoreContinuityCompaction(body []byte, checkpoint *continuityCheckpoint) 
 		return nil, false
 	}
 	return replay, true
+}
+
+func continuityVisiblePrefixMatches(input, prefix []json.RawMessage) bool {
+	encoded, err := json.Marshal(input)
+	if err != nil {
+		return false
+	}
+	visible, ok := visibleContinuityItems(gjson.ParseBytes(encoded))
+	if !ok || len(visible) != len(prefix) {
+		return false
+	}
+	for i := range visible {
+		if !continuityItemsEqual(visible[i], prefix[i]) {
+			return false
+		}
+	}
+	return true
 }
 
 func matchContinuityWindow(items []gjson.Result, compactionIndex int, window []json.RawMessage) (int, int, bool) {
