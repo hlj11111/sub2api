@@ -54,19 +54,23 @@ func TestResponsesBalancedFailoverPreservesOriginalThenDropsAuxiliaryReasoning(t
 		h.Responses(c)
 		require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
 		require.Contains(t, upstream.bodies[0], "keep-on-original")
+		bound, err := cache.GetSessionAccountID(c.Request.Context(), 3131, "openai:u100:"+hash)
+		require.NoError(t, err)
 		if fail {
+			require.EqualValues(t, 2, bound, "successful recovery must bind the replacement channel")
 			require.Equal(t, []int64{1, 2}, upstream.accounts)
 			require.NotContains(t, upstream.bodies[1], "keep-on-original")
 			for _, text := range []string{"original question", "original answer", "next question"} {
 				require.Contains(t, upstream.bodies[1], text)
 			}
 		} else {
+			require.EqualValues(t, 1, bound)
 			require.Equal(t, []int64{1}, upstream.accounts)
 		}
 	}
 }
 
-func TestResponsesBalancedMissingBindingDoesNotFanOut(t *testing.T) {
+func TestResponsesBalancedMissingBindingTriesAvailableBackups(t *testing.T) {
 	upstream := &balancedRecoveryUpstream{failAll: true}
 	h := newOpenAIResponsesFailoverTestHandler(t, upstream)
 	c, rec := newOpenAIResponsesFailoverTestContext(t, context.Background())
@@ -74,7 +78,13 @@ func TestResponsesBalancedMissingBindingDoesNotFanOut(t *testing.T) {
 	c.Request.ContentLength = int64(len(balancedHandlerBody))
 	c.Request.Header.Set("session_id", "missing-binding")
 	h.Responses(c)
-	require.Equal(t, []int64{1}, upstream.accounts, "one recovered attempt, no speculative chain")
+	require.Equal(t, []int64{1, 2}, upstream.accounts, "portable history should try the remaining available channel")
+	for _, body := range upstream.bodies {
+		require.NotContains(t, body, "keep-on-original")
+		for _, text := range []string{"original question", "original answer", "next question"} {
+			require.Contains(t, body, text)
+		}
+	}
 	require.Equal(t, http.StatusBadGateway, rec.Code)
 	require.Equal(t, "UPSTREAM_REQUEST_FAILED", gjson.GetBytes(rec.Body.Bytes(), "error.code").String())
 	require.Equal(t, "upstream_error", gjson.GetBytes(rec.Body.Bytes(), "error.type").String())

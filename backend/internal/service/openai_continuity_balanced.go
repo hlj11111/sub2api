@@ -17,8 +17,8 @@ const openAIBalancedRecoveryWindow = 8 * time.Second
 
 // ManageOpenAIResponsesContinuity ties lease cleanup to handler completion, not
 // client cancellation. A client can close as soon as it sees the terminal event,
-// while Forward is still committing the successful account. No request payload
-// is retained beyond this request or written to the binding store.
+// while Forward is still committing the successful account. Eligible visible
+// history is retained only in the separately encrypted, expiring checkpoint.
 func ManageOpenAIResponsesContinuity(ctx context.Context, body []byte, balanced bool) func() {
 	st := continuityState(ctx)
 	if st == nil {
