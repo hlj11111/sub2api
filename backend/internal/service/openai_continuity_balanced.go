@@ -166,7 +166,7 @@ func openAIBalancedReplayBody(body []byte) ([]byte, bool) {
 	return replay, true
 }
 
-// Caller holds st.mu. A backup is attempted only once per HTTP request.
+// Caller holds st.mu. Different backup accounts share a bounded request budget.
 func (st *openAIContinuityState) allowBalancedMigration() bool {
 	if !st.balanced || st.previousResponseID != "" || st.backupBudgetExhausted() {
 		return false
