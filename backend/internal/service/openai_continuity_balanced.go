@@ -27,6 +27,7 @@ func ManageOpenAIResponsesContinuity(ctx context.Context, body []byte, balanced 
 	st.mu.Lock()
 	st.handlerDone = make(chan struct{})
 	st.balanced = balanced
+	st.requestedModel = strings.TrimSpace(openAIRequestPayloadView(body).Get("model").String())
 	if len(body) <= continuityCheckpointMaxBytes {
 		st.ingressBody = append([]byte(nil), body...)
 	}
@@ -98,6 +99,10 @@ func openAIBalancedReplayBody(body []byte) ([]byte, bool) {
 		switch {
 		case kind == "compaction_trigger":
 			// This is a current-turn instruction, not opaque historical state.
+		case kind == "additional_tools" || kind == "configuration_update":
+			if !portableContinuityControlItem(item) {
+				return nil, false
+			}
 		case kind == "reasoning":
 			if item.Get("encrypted_content").String() != "" {
 				if !seenUser {

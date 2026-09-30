@@ -38,6 +38,11 @@ type OpenAIContinuityHistory interface {
 	RecoverOpenAIContinuityAccount(context.Context, int64, int64, string) (int64, error)
 }
 
+// A model-specific route must never recover the last turn of another model.
+type OpenAIModelContinuityHistory interface {
+	RecoverOpenAIModelContinuityAccount(context.Context, int64, int64, string, string) (int64, error)
+}
+
 type openAIContinuityKey struct{}
 type openAIContinuityState struct {
 	mu                   sync.Mutex
@@ -46,6 +51,8 @@ type openAIContinuityState struct {
 	enabled              bool
 	explicitSession      bool
 	clientSessionID      string // history lookup only; never logged
+	requestedModel       string // immutable ingress model for managed HTTP requests
+	legacyHash           string // pre-model routing scope, read-only rollout recovery
 	retryAccountID       int64  // request-local retry target; never commits a session binding
 	migrationUnsafe      bool
 	nonPortableReason    string // fixed diagnostic category; never request content
@@ -108,6 +115,7 @@ func (s *OpenAIGatewayService) beginContinuity(ctx context.Context, groupID *int
 	if st.initialized {
 		return nil
 	}
+	st.legacyHash = userScopedOpenAISessionHash(ctx, continuityRoutingHash(ctx, hash))
 	hash = scopedOpenAISessionHash(ctx, hash)
 	st.groupID, st.hash, st.gateway = derefGroupID(groupID), hash, s
 	st.backupLimit = s.continuityBackupLimit()
@@ -382,6 +390,16 @@ func (s *OpenAIGatewayService) waitForContinuityRecovery(ctx context.Context, ac
 }
 
 func scopedOpenAISessionHash(ctx context.Context, hash string) string {
+	hash = continuityRoutingHash(ctx, hash)
+	if st := continuityState(ctx); st != nil && st.requestedModel != "" && hash != "" {
+		// Keep the persisted 16-character key format. The framing separates this
+		// namespace from old routes and distinguishes exact requested model names.
+		hash = DeriveSessionHashFromSeed(fmt.Sprintf("openai-model-v1:%s:%d:%s", hash, len(st.requestedModel), st.requestedModel))
+	}
+	return userScopedOpenAISessionHash(ctx, hash)
+}
+
+func continuityRoutingHash(ctx context.Context, hash string) string {
 	if st := continuityState(ctx); st != nil {
 		if routing, ok := st.routingHashes.Load(hash); ok {
 			if routingHash, valid := routing.(string); valid {
@@ -389,6 +407,10 @@ func scopedOpenAISessionHash(ctx context.Context, hash string) string {
 			}
 		}
 	}
+	return hash
+}
+
+func userScopedOpenAISessionHash(ctx context.Context, hash string) string {
 	userID, _ := ctx.Value(ctxkey.UserID).(int64)
 	if userID <= 0 || hash == "" {
 		return hash

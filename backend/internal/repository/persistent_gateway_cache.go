@@ -27,6 +27,7 @@ func NewPersistentGatewayCache(rdb *redis.Client, db *sql.DB) service.GatewayCac
 
 var _ service.OpenAIContinuityCache = (*persistentGatewayCache)(nil)
 var _ service.OpenAIContinuityHistory = (*persistentGatewayCache)(nil)
+var _ service.OpenAIModelContinuityHistory = (*persistentGatewayCache)(nil)
 
 func persistentOpenAISession(key string) (int64, string, bool) {
 	if !strings.HasPrefix(key, "openai:u") {
@@ -146,13 +147,29 @@ func (c *persistentGatewayCache) CheckContinuityBinding(ctx context.Context, gro
 // Revalidate the latest candidate through the normal account policy/scheduler;
 // never search backwards for a different, more convenient account.
 func (c *persistentGatewayCache) RecoverOpenAIContinuityAccount(ctx context.Context, user, group int64, sessionID string) (int64, error) {
+	return c.recoverOpenAIContinuityAccount(ctx, user, group, sessionID, "")
+}
+
+func (c *persistentGatewayCache) RecoverOpenAIModelContinuityAccount(ctx context.Context, user, group int64, sessionID, model string) (int64, error) {
+	if strings.TrimSpace(model) == "" {
+		return 0, service.ErrStickySessionNotFound
+	}
+	return c.recoverOpenAIContinuityAccount(ctx, user, group, sessionID, strings.TrimSpace(model))
+}
+
+func (c *persistentGatewayCache) recoverOpenAIContinuityAccount(ctx context.Context, user, group int64, sessionID, model string) (int64, error) {
 	if user <= 0 || strings.TrimSpace(sessionID) == "" {
 		return 0, service.ErrStickySessionNotFound
 	}
 	var account int64
-	err := c.db.QueryRowContext(ctx, `SELECT account_id FROM usage_logs
-		WHERE user_id=$1 AND COALESCE(group_id,0)=$2 AND session_id=$3
-		ORDER BY created_at DESC, id DESC LIMIT 1`, user, group, sessionID).Scan(&account)
+	query := `SELECT account_id FROM usage_logs
+		WHERE user_id=$1 AND COALESCE(group_id,0)=$2 AND session_id=$3`
+	args := []any{user, group, sessionID}
+	if model != "" {
+		query += ` AND COALESCE(NULLIF(TRIM(requested_model), ''), model)=$4`
+		args = append(args, model)
+	}
+	err := c.db.QueryRowContext(ctx, query+` ORDER BY created_at DESC, id DESC LIMIT 1`, args...).Scan(&account)
 	if errors.Is(err, sql.ErrNoRows) {
 		return 0, service.ErrStickySessionNotFound
 	}

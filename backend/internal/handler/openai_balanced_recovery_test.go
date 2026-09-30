@@ -50,11 +50,13 @@ func TestResponsesBalancedFailoverPreservesOriginalThenDropsAuxiliaryReasoning(t
 		c.Request.ContentLength = int64(len(balancedHandlerBody))
 		c.Request.Header.Set("session_id", "balanced-handler")
 		hash := h.gatewayService.GenerateSessionHash(c, []byte(balancedHandlerBody))
-		require.NoError(t, cache.SetSessionAccountID(c.Request.Context(), 3131, "openai:"+hash, 1, time.Hour))
+		// Managed HTTP ownership is scoped to the exact requested model.
+		key := "openai:" + service.DeriveSessionHashFromSeed("openai-model-v1:"+hash+":7:gpt-5.1")
+		require.NoError(t, cache.SetSessionAccountID(c.Request.Context(), 3131, key, 1, time.Hour))
 		h.Responses(c)
 		require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
 		require.Contains(t, upstream.bodies[0], "keep-on-original")
-		bound, err := cache.GetSessionAccountID(c.Request.Context(), 3131, "openai:"+hash)
+		bound, err := cache.GetSessionAccountID(c.Request.Context(), 3131, key)
 		require.NoError(t, err)
 		if fail {
 			require.EqualValues(t, 2, bound, "successful recovery must bind the replacement channel")

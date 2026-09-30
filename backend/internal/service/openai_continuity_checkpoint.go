@@ -137,6 +137,10 @@ func visibleContinuityItems(input gjson.Result) ([]json.RawMessage, bool) {
 		switch item.Get("type").String() {
 		case "reasoning", "compaction_trigger":
 			continue
+		case "additional_tools", "configuration_update":
+			if !portableContinuityControlItem(item) {
+				return nil, false
+			}
 		case "", "message":
 			role := item.Get("role").String()
 			if role != "user" && role != "assistant" && role != "system" && role != "developer" {
@@ -197,19 +201,12 @@ func restoreContinuityCompaction(body []byte, checkpoint *continuityCheckpoint) 
 			// Current leading system/developer messages remain authoritative.
 			input = input[:leadingCount]
 			for _, leading := range input {
-				role := gjson.GetBytes(leading, "role").String()
-				if role != "system" && role != "developer" {
+				if !continuityLeadingInstruction(leading) {
 					return nil, false
 				}
 			}
 			if len(input) > 0 {
-				for len(prefix) > 0 {
-					role := gjson.GetBytes(prefix[0], "role").String()
-					if role != "system" && role != "developer" {
-						break
-					}
-					prefix = prefix[1:]
-				}
+				prefix = continuityReplaceLeadingInstructions(input, prefix)
 			}
 			input = append(input, prefix...)
 			restored = true
@@ -229,6 +226,63 @@ func restoreContinuityCompaction(body []byte, checkpoint *continuityCheckpoint) 
 		return nil, false
 	}
 	return replay, true
+}
+
+// Lite moves declarations into input; these control items are explicit payload,
+// not references to hidden conversation state. Preserve their order and content.
+func portableContinuityControlItem(item gjson.Result) bool {
+	if !item.IsObject() {
+		return false
+	}
+	switch item.Get("type").String() {
+	case "additional_tools":
+		if item.Get("role").String() != "developer" || !item.Get("tools").IsArray() {
+			return false
+		}
+		for _, tool := range item.Get("tools").Array() {
+			if !tool.IsObject() || tool.Get("type").Type != gjson.String || tool.Get("type").String() == "" {
+				return false
+			}
+		}
+		return true
+	case "configuration_update":
+		return item.Get("reasoning").IsObject() && item.Get("reasoning.effort").Type == gjson.String && item.Get("reasoning.effort").String() != ""
+	}
+	return false
+}
+
+func continuityLeadingInstruction(raw json.RawMessage) bool {
+	item := gjson.ParseBytes(raw)
+	kind := item.Get("type").String()
+	if kind == "additional_tools" || kind == "configuration_update" {
+		return portableContinuityControlItem(item)
+	}
+	role := item.Get("role").String()
+	return (kind == "" || kind == "message") && (role == "system" || role == "developer")
+}
+
+func continuityReplaceLeadingInstructions(current, prefix []json.RawMessage) []json.RawMessage {
+	replaced := map[string]bool{}
+	for _, raw := range current {
+		kind := gjson.GetBytes(raw, "type").String()
+		if kind == "" || kind == "message" {
+			kind = "message"
+		}
+		replaced[kind] = true
+	}
+	kept := make([]json.RawMessage, 0, len(prefix))
+	leading := true
+	for _, raw := range prefix {
+		leading = leading && continuityLeadingInstruction(raw)
+		kind := gjson.GetBytes(raw, "type").String()
+		if kind == "" || kind == "message" {
+			kind = "message"
+		}
+		if !leading || !replaced[kind] {
+			kept = append(kept, raw)
+		}
+	}
+	return kept
 }
 
 func continuityVisiblePrefixMatches(input, prefix []json.RawMessage) bool {
@@ -302,7 +356,7 @@ func (s *OpenAIGatewayService) loadContinuityCheckpoint(ctx context.Context) {
 	}
 	st.checkpointLoaded = true
 	body := append([]byte(nil), st.ingressBody...)
-	hash, group := st.hash, st.groupID
+	hash, legacyHash, group := st.hash, st.legacyHash, st.groupID
 	st.mu.Unlock()
 	aead, err := s.continuityCheckpointCipher()
 	store, ok := s.cache.(OpenAIContinuityCheckpointStore)
@@ -310,13 +364,20 @@ func (s *OpenAIGatewayService) loadContinuityCheckpoint(ctx context.Context) {
 		return
 	}
 	sealed, err := store.GetContinuityCheckpoint(ctx, group, s.openAISessionCacheKey(hash))
+	readHash := hash
+	if err == nil && len(sealed) == 0 && legacyHash != "" && legacyHash != hash {
+		// Read the old scope only for rollout. Exact compaction digests and window
+		// matching still prove coverage; future commits always use the model scope.
+		sealed, err = store.GetContinuityCheckpoint(ctx, group, s.openAISessionCacheKey(legacyHash))
+		readHash = legacyHash
+	}
 	if err != nil {
 		logger.FromContext(ctx).Warn("openai.session_checkpoint_read_failed", zap.Int64("group_id", group))
 		return
 	}
 	checkpoint := &continuityCheckpoint{Version: 1, Prefixes: map[string][]json.RawMessage{}}
 	if len(sealed) > 0 {
-		checkpoint, err = openContinuityCheckpoint(aead, checkpointScope(group, hash), sealed)
+		checkpoint, err = openContinuityCheckpoint(aead, checkpointScope(group, readHash), sealed)
 		if err != nil {
 			logger.FromContext(ctx).Warn("openai.session_checkpoint_invalid", zap.Int64("group_id", group))
 			return

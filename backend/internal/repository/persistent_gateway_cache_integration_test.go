@@ -224,6 +224,24 @@ func TestPersistentContinuityLegacyHistoryIsolation(t *testing.T) {
 	require.ErrorIs(t, err, service.ErrStickySessionNotFound)
 	_, err = c.RecoverOpenAIContinuityAccount(ctx, first.ID, 0, session+"' OR 1=1 --")
 	require.ErrorIs(t, err, service.ErrStickySessionNotFound)
+	key := mustCreateApiKey(t, client, &service.APIKey{UserID: first.ID, Key: uuid.NewString(), Name: "delegated model"})
+	luna := "gpt-6-luna"
+	_, err = repo.Create(ctx, &service.UsageLog{UserID: first.ID, APIKeyID: key.ID,
+		AccountID: accountA.ID, RequestID: uuid.NewString(), Model: "mapped-upstream", RequestedModel: luna,
+		SessionID: &session, InputTokens: 1, OutputTokens: 1, CreatedAt: now.Add(time.Second)})
+	require.NoError(t, err)
+	for _, tc := range []struct {
+		model string
+		want  int64
+	}{{"gpt-5", accountB.ID}, {luna, accountA.ID}} {
+		id, lookupErr := c.RecoverOpenAIModelContinuityAccount(ctx, first.ID, 0, session, tc.model)
+		require.NoError(t, lookupErr)
+		require.Equal(t, tc.want, id, "requested model must select its own latest successful channel")
+	}
+	for _, model := range []string{"gpt-6-astra", "mapped-upstream", "", "' OR 1=1 --"} {
+		_, err = c.RecoverOpenAIModelContinuityAccount(ctx, first.ID, 0, session, model)
+		require.ErrorIs(t, err, service.ErrStickySessionNotFound)
+	}
 	var count int
 	require.NoError(t, integrationDB.QueryRowContext(ctx, `SELECT count(*) FROM openai_session_bindings WHERE user_id=$1`, first.ID).Scan(&count))
 	require.Zero(t, count, "history lookup alone must not create a durable binding")

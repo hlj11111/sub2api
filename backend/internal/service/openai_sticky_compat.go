@@ -133,8 +133,20 @@ func (s *OpenAIGatewayService) getStickySessionAccountID(ctx context.Context, gr
 	if err != nil && !errors.Is(err, ErrStickySessionNotFound) {
 		return 0, err
 	}
+	st := continuityState(ctx)
+	st.mu.Lock()
+	model, sessionID := st.requestedModel, st.clientSessionID
+	st.mu.Unlock()
+	if model != "" {
+		userID, _ := ctx.Value(ctxkey.UserID).(int64)
+		if history, ok := s.cache.(OpenAIModelContinuityHistory); ok && userID > 0 && sessionID != "" && continuityRoutingHash(ctx, sessionHash) == DeriveSessionHashFromSeed(sessionID) {
+			return history.RecoverOpenAIModelContinuityAccount(ctx, userID, derefGroupID(groupID), sessionID, model)
+		}
+		// Shared legacy routes cannot prove model ownership. Fresh, portable
+		// requests use the normal picker; opaque requests remain guarded.
+		return 0, ErrStickySessionNotFound
+	}
 	if history, ok := s.cache.(OpenAIContinuityHistory); ok {
-		st := continuityState(ctx)
 		st.mu.Lock()
 		sessionID := st.clientSessionID
 		st.mu.Unlock()

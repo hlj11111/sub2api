@@ -95,21 +95,22 @@ func TestBalancedLongCooldownSkipsWaitAndPreservesBindingUntilSuccess(t *testing
 	c.Request = httptest.NewRequest("POST", "/v1/responses", nil)
 	c.Request.Header.Set("session_id", "balanced-cooldown")
 	hash := svc.GenerateSessionHash(c, []byte(balancedTranscript))
-	cache.sessionBindings["openai:"+hash] = 1
 	ctx := c.Request.Context()
 	defer ManageOpenAIResponsesContinuity(ctx, []byte(balancedTranscript), true)()
+	key := "openai:" + scopedOpenAISessionHash(ctx, hash)
+	cache.sessionBindings[key] = 1
 	start := time.Now()
 	selection, _, err := svc.SelectAccountWithScheduler(ctx, &group, "", hash, "gpt-5.1", nil, OpenAIUpstreamTransportAny, false)
 	require.NoError(t, err)
 	require.Less(t, time.Since(start), time.Second)
 	require.EqualValues(t, 2, selection.Account.ID)
 	defer selection.ReleaseFunc()
-	require.EqualValues(t, 1, cache.sessionBindings["openai:"+hash])
+	require.EqualValues(t, 1, cache.sessionBindings[key])
 	body, err := prepareOpenAIBalancedForward(ctx, selection.Account, []byte(balancedTranscript))
 	require.NoError(t, err)
 	require.True(t, json.Valid(body))
 	CompleteOpenAIContinuity(ctx, selection.Account)
-	require.EqualValues(t, 2, cache.sessionBindings["openai:"+hash])
+	require.EqualValues(t, 2, cache.sessionBindings[key])
 }
 
 // Simulate the real lease owner check, and make release ordering observable.
