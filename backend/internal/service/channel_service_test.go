@@ -1005,7 +1005,7 @@ func TestResolveChannelMapping_DefaultBillingModelSource(t *testing.T) {
 	svc := newTestChannelService(repo)
 
 	result := svc.ResolveChannelMapping(context.Background(), 10, "claude-opus-4")
-	require.Equal(t, BillingModelSourceChannelMapped, result.BillingModelSource)
+	require.Equal(t, BillingModelSourceRequested, result.BillingModelSource)
 }
 
 func TestResolveChannelMapping_UpstreamBillingModelSource(t *testing.T) {
@@ -1580,11 +1580,11 @@ func TestCreate_DefaultBillingModelSource(t *testing.T) {
 
 	result, err := svc.Create(context.Background(), &CreateChannelInput{
 		Name:               "new-channel",
-		BillingModelSource: "", // empty, should default to "channel_mapped"
+		BillingModelSource: "", // empty, should default to "requested"
 	})
 	require.NoError(t, err)
 	require.NotNil(t, result)
-	require.Equal(t, BillingModelSourceChannelMapped, result.BillingModelSource)
+	require.Equal(t, BillingModelSourceRequested, result.BillingModelSource)
 }
 
 func TestCreate_InvalidatesCache(t *testing.T) {
@@ -2127,7 +2127,7 @@ func TestMatchingPlatforms(t *testing.T) {
 		{"anthropic returns itself", PlatformAnthropic, []string{PlatformAnthropic}},
 		{"gemini returns itself", PlatformGemini, []string{PlatformGemini}},
 		{"openai returns itself", PlatformOpenAI, []string{PlatformOpenAI}},
-		{"composite returns concrete platforms", PlatformComposite, []string{PlatformAnthropic, PlatformGemini, PlatformOpenAI, PlatformAntigravity, PlatformGrok, PlatformKimi, PlatformZhipu, PlatformDeepseek, PlatformMiniMax, PlatformOpenCodeGo}},
+		{"composite returns concrete platforms", PlatformComposite, []string{PlatformAnthropic, PlatformGemini, PlatformOpenAI, PlatformAntigravity, PlatformGrok, PlatformKimi, PlatformZhipu, PlatformDeepseek, PlatformMiniMax, PlatformOpenCodeGo, PlatformTypeSafe, PlatformCommandCode, PlatformCline}},
 	}
 
 	for _, tt := range tests {

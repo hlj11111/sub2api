@@ -156,7 +156,7 @@ func TestListAvailable_ListActiveErrorPropagates(t *testing.T) {
 }
 
 func TestListAvailable_DefaultsEmptyBillingModelSource(t *testing.T) {
-	// 渠道 BillingModelSource 为空时应回填为 BillingModelSourceChannelMapped，
+	// 渠道 BillingModelSource 为空时应回填为 BillingModelSourceRequested，
 	// 显式值应原样保留（由 service 层统一处理，避免各 handler 重复默认逻辑）。
 	channels := []Channel{
 		{ID: 1, Name: "empty", BillingModelSource: ""},
@@ -172,7 +172,7 @@ func TestListAvailable_DefaultsEmptyBillingModelSource(t *testing.T) {
 	for _, ch := range out {
 		byName[ch.Name] = ch.BillingModelSource
 	}
-	require.Equal(t, BillingModelSourceChannelMapped, byName["empty"])
+	require.Equal(t, BillingModelSourceRequested, byName["empty"])
 	require.Equal(t, BillingModelSourceUpstream, byName["explicit"])
 }
 

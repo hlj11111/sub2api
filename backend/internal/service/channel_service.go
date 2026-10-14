@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/domain"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
@@ -368,7 +369,7 @@ func isPlatformPricingMatch(groupPlatform, pricingPlatform string) bool {
 // fallback used before a request target has been resolved.
 func matchingPlatforms(groupPlatform string) []string {
 	if groupPlatform == PlatformComposite {
-		return []string{PlatformAnthropic, PlatformGemini, PlatformOpenAI, PlatformAntigravity, PlatformGrok, PlatformKimi, PlatformZhipu, PlatformDeepseek, PlatformMiniMax, PlatformOpenCodeGo}
+		return domain.CompositePrecedencePlatformIDs()
 	}
 	return []string{groupPlatform}
 }
@@ -886,7 +887,7 @@ func (s *ChannelService) Create(ctx context.Context, input *CreateChannelInput) 
 	return created, nil
 }
 
-// GetByID 获取渠道详情。返回前统一把空 BillingModelSource 回填为 ChannelMapped，
+// GetByID 获取渠道详情。返回前统一把空 BillingModelSource 回填为 Requested，
 // 让所有 handler 无需重复处理历史空值。
 func (s *ChannelService) GetByID(ctx context.Context, id int64) (*Channel, error) {
 	ch, err := s.repo.GetByID(ctx, id)

@@ -38,7 +38,7 @@ func TestBillingModelForRestriction_ResponseModelUsesMappedPrecheck(t *testing.T
 func TestBillingModelForRestriction_Empty(t *testing.T) {
 	t.Parallel()
 	got := billingModelForRestriction("", "claude-sonnet-4-5", "claude-sonnet-4-6")
-	require.Equal(t, "claude-sonnet-4-6", got, "empty source defaults to channel_mapped")
+	require.Equal(t, "claude-sonnet-4-5", got, "empty source defaults to requested")
 }
 
 // --- resolveAccountUpstreamModel ---

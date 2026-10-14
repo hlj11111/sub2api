@@ -1739,6 +1739,7 @@ func TestOpenAIGatewayServiceRecordUsage_BillsMappedRequestsUsingRequestedModel(
 		Result: &OpenAIForwardResult{
 			RequestID:     "resp_upstream_model_billing_fallback",
 			Model:         "gpt-5.1",
+			BillingModel:  "gpt-5.1-codex",
 			UpstreamModel: "gpt-5.1-codex",
 			Usage:         usage,
 			Duration:      time.Second,
