@@ -11,6 +11,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
+	"github.com/tidwall/gjson"
 )
 
 func TestOpenAIResponses_RejectsInvalidUTF8BeforeRouting(t *testing.T) {
@@ -47,6 +48,7 @@ func TestOpenAIResponses_ValidUnicodeReachesFieldValidation(t *testing.T) {
 	h := newOpenAIHandlerForPreviousResponseIDValidation(t, nil)
 	h.Responses(c)
 	require.Equal(t, http.StatusBadRequest, w.Code)
-	require.Contains(t, w.Body.String(), "model is required")
+	require.Equal(t, "LOCAL_REQUEST_MODEL_MISSING", gjson.Get(w.Body.String(), "error.code").String())
+	require.Equal(t, "本地请求校验未通过：缺少 model 参数", gjson.Get(w.Body.String(), "error.message").String())
 	require.NotContains(t, w.Body.String(), "UTF-8")
 }

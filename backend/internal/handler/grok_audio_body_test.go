@@ -16,6 +16,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
+	"github.com/tidwall/gjson"
 )
 
 func TestGrokVoiceRequestBodyMemoryOverload(t *testing.T) {
@@ -76,10 +77,11 @@ func TestGrokVoiceRequestBodyReadFailures(t *testing.T) {
 		body       io.Reader
 		wantStatus int
 		wantText   string
+		wantCode   string
 	}{
-		{"timeout", iotest.ErrReader(timeoutErr), http.StatusRequestTimeout, "Timed out reading request body"},
-		{"truncated", iotest.ErrReader(io.ErrUnexpectedEOF), http.StatusBadRequest, "Failed to read request body"},
-		{"missing", nil, http.StatusBadRequest, "request body is required"},
+		{"timeout", iotest.ErrReader(timeoutErr), http.StatusRequestTimeout, "Timed out reading request body", ""},
+		{"truncated", iotest.ErrReader(io.ErrUnexpectedEOF), http.StatusBadRequest, "本地请求校验未通过：读取请求内容失败", "LOCAL_REQUEST_READ_FAILED"},
+		{"missing", nil, http.StatusBadRequest, "request body is required", ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			router := gin.New()
@@ -103,6 +105,7 @@ func TestGrokVoiceRequestBodyReadFailures(t *testing.T) {
 
 			require.Equal(t, tc.wantStatus, rec.Code, rec.Body.String())
 			require.Contains(t, rec.Body.String(), tc.wantText)
+			require.Equal(t, tc.wantCode, gjson.Get(rec.Body.String(), "error.code").String())
 			require.NotContains(t, rec.Body.String(), "10.0.0.1")
 		})
 	}

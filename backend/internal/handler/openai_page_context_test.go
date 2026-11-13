@@ -32,7 +32,8 @@ func TestNormalizeCodexPageContextFirstMessage(t *testing.T) {
 	c, _ := gin.CreateTestContext(w)
 	require.False(t, h.validateFunctionCallOutputRequest(c, body, zap.NewNop()))
 	require.Equal(t, 400, w.Code)
-	require.Contains(t, w.Body.String(), "function_call_output requires call_id")
+	require.Equal(t, "LOCAL_TOOL_CALL_ID_MISSING", gjson.Get(w.Body.String(), "error.code").String())
+	require.Contains(t, gjson.Get(w.Body.String(), "error.message").String(), "HTTP 工具结果必须提供 call_id")
 
 	got, changed := normalizeCodexPageContext(body)
 	require.True(t, changed)

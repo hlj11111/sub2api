@@ -66,10 +66,16 @@ migration 250; the upstream SQL is retained byte for byte.
 At integration time GitHub refused CI dispatch with HTTP 422, "Actions has been
 disabled for this repository." Enabling the individual CI workflow did not
 remove the repository restriction. The configured token cannot administer
-repository Actions permissions (HTTP 403). CI now supports workflow_dispatch so
-this branch can be validated after the owner enables Actions. Until all required
-jobs pass, the integration remains on `codex/merge-0.2.21-preserve-fork` and main
-must not be advanced.
+repository Actions permissions (HTTP 403). The Actions page identified a
+fork-wide pause due to usage scale; the owner re-enabled workflows. CI now also
+supports workflow_dispatch for explicit integration-branch validation.
+
+The first full CI passed frontend, lint and release-helper checks. Its unit test
+run passed the service suites, including the fork's billing/continuity tests,
+but found three newly added upstream handler tests expecting English error
+messages. They now assert the fork's existing local diagnostic codes and Chinese
+messages while retaining the upstream status, validation and body-safety checks.
+Production behavior was not changed to accommodate these test expectations.
 
 Builds and backend/frontend tests run on GitHub-hosted runners. This code merge
 does not authorize production migration execution, paid API calls or deployment.
