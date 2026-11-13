@@ -1405,6 +1405,37 @@ describe('EditAccountModal', () => {
     expect(updateAccountMock.mock.calls[0]?.[1]?.extra?.openai_responses_supported).toBe(true)
   })
 
+  it.each([undefined, true, false])('loads standalone search setting %s and allows changing it independently', async (enabled) => {
+    const account = buildAccount()
+    account.credentials.openai_capabilities = ['chat_completions']
+    if (enabled !== undefined) account.credentials.openai_alpha_search_enabled = enabled
+    updateAccountMock.mockReset().mockResolvedValue(account)
+    checkMixedChannelRiskMock.mockReset().mockResolvedValue({ has_risk: false })
+    const wrapper = mountModal(account)
+    const checkbox = wrapper.get('[data-testid="openai-alpha-search-enabled"]')
+    expect((checkbox.element as HTMLInputElement).checked).toBe(enabled !== false)
+    await checkbox.setValue(enabled === false)
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+
+    expect(updateAccountMock).toHaveBeenCalledTimes(1)
+    expect(updateAccountMock.mock.calls[0]?.[1]?.credentials).toMatchObject({
+      openai_alpha_search_enabled: enabled === false,
+      openai_capabilities: ['chat_completions']
+    })
+    wrapper.unmount()
+  })
+
+  it('preserves disabled standalone search when editing an unrelated field', async () => {
+    const account = buildAccount()
+    account.credentials.openai_alpha_search_enabled = false
+    updateAccountMock.mockReset().mockResolvedValue(account)
+    checkMixedChannelRiskMock.mockReset().mockResolvedValue({ has_risk: false })
+    const wrapper = mountModal(account)
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+    expect(updateAccountMock.mock.calls[0]?.[1]?.credentials?.openai_alpha_search_enabled).toBe(false)
+    wrapper.unmount()
+  })
+
   it('submits OpenAI APIKey endpoint capabilities from credentials', async () => {
     const account = buildAccount()
     account.credentials.openai_capabilities = ['chat_completions']

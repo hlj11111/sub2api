@@ -1118,6 +1118,36 @@
         </div>
       </div>
 
+      <!-- Standalone search is independent of the model endpoint capabilities. -->
+      <div v-if="allOpenAIAPIKey" class="border-t border-gray-200 pt-4 dark:border-dark-600">
+        <div class="mb-3 flex items-center justify-between gap-4">
+          <div class="flex-1">
+            <label class="input-label mb-0" for="bulk-edit-openai-alpha-search-apply">
+              {{ t('admin.accounts.openai.alphaSearchEnabled') }}
+            </label>
+            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+              {{ t('admin.accounts.openai.alphaSearchEnabledDesc') }}
+            </p>
+          </div>
+          <input
+            id="bulk-edit-openai-alpha-search-apply"
+            v-model="enableOpenAIAlphaSearch"
+            type="checkbox"
+            class="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+          />
+        </div>
+        <label class="flex items-center gap-2 text-sm" :class="!enableOpenAIAlphaSearch && 'opacity-50'">
+          <input
+            v-model="openAIAlphaSearchEnabled"
+            :disabled="!enableOpenAIAlphaSearch"
+            type="checkbox"
+            data-testid="bulk-edit-openai-alpha-search-enabled"
+            class="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+          />
+          {{ t('admin.accounts.openai.alphaSearchEnabled') }}
+        </label>
+      </div>
+
       <!-- OpenAI API Key Responses route -->
       <div v-if="allOpenAIAPIKey" class="border-t border-gray-200 pt-4 dark:border-dark-600">
         <div class="mb-3 flex items-center justify-between gap-4">
@@ -1748,6 +1778,8 @@ const openAIEndpointCapabilities = ref<OpenAIEndpointCapability[]>([
   'embeddings'
 ])
 const openAIResponsesMode = ref<OpenAIResponsesMode>('auto')
+const enableOpenAIAlphaSearch = ref(false)
+const openAIAlphaSearchEnabled = ref(true)
 const openaiOAuthResponsesWebSocketV2Mode = ref<OpenAIWSMode>(OPENAI_WS_MODE_OFF)
 const openaiAPIKeyResponsesWebSocketV2Mode = ref<OpenAIWSMode>(OPENAI_WS_MODE_OFF)
 const upstreamBillingAutoProbeMode = ref<'enabled' | 'disabled'>('enabled')
@@ -2055,6 +2087,11 @@ const buildUpdatePayload = (): Record<string, unknown> | null => {
     credentialsChanged = true
   }
 
+  if (enableOpenAIAlphaSearch.value && allOpenAIAPIKey.value) {
+    credentials.openai_alpha_search_enabled = openAIAlphaSearchEnabled.value
+    credentialsChanged = true
+  }
+
   if (
     applyOpenAIResponsesMode ||
     (applyOpenAIEndpointCapabilities && !openAITextGenerationCapabilityEnabled.value)
@@ -2259,6 +2296,7 @@ const handleSubmit = async () => {
     (enableOpenAILongContextBilling.value && allOpenAIPassthroughCapable.value) ||
     (enableOpenAIImageSizeTiers.value && allOpenAIPassthroughCapable.value) ||
     (enableOpenAIEndpointCapabilities.value && allOpenAIAPIKey.value) ||
+    (enableOpenAIAlphaSearch.value && allOpenAIAPIKey.value) ||
     (enableOpenAIResponsesMode.value && allOpenAIAPIKey.value) ||
     enableModelRestriction.value ||
     enableCustomErrorCodes.value ||
@@ -2441,6 +2479,8 @@ watch(
       openAILongContextBillingEnabled.value = false
       openAIImageSizeTiers.value = [...OPENAI_IMAGE_SIZE_TIERS]
       openAIEndpointCapabilities.value = ['chat_completions', 'embeddings']
+      enableOpenAIAlphaSearch.value = false
+      openAIAlphaSearchEnabled.value = true
       openAIResponsesMode.value = 'auto'
       modelRestrictionMode.value = 'whitelist'
       allowedModels.value = []

@@ -700,6 +700,8 @@ export default {
         capabilityChatCompletions: 'Chat Completions',
         capabilityChatCompletionsAuto: 'Chat Completions (auto probe)',
         capabilityEmbeddings: 'Embeddings',
+        alphaSearchEnabled: 'Support standalone search (/v1/alpha/search)',
+        alphaSearchEnabledDesc: 'Enabled by default for existing accounts. Turn off for upstreams that do not support this endpoint; search requests will skip this account without affecting regular conversations or Responses routing.',
         responsesStatusAutoSupported: 'Auto probe: Responses',
         responsesStatusAutoUnsupported: 'Auto probe: Chat Completions',
         responsesStatusAutoUnknown: 'Auto probe: unknown',

@@ -2574,6 +2574,12 @@ func (s *OpenAIGatewayService) ReportOpenAIAccountScheduleResult(account *Accoun
 	if account == nil {
 		return false
 	}
+	if !success && len(observedErr) > 0 {
+		var failoverErr *UpstreamFailoverError
+		if errors.As(observedErr[0], &failoverErr) && failoverErr.EndpointUnsupported {
+			return false
+		}
+	}
 	accountID := account.ID
 	healthTripped := false
 	if s != nil && s.rateLimitService != nil {

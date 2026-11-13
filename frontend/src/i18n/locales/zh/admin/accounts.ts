@@ -818,6 +818,8 @@ export default {
         capabilityChatCompletions: 'Chat Completions',
         capabilityChatCompletionsAuto: 'Chat Completions（自动探测）',
         capabilityEmbeddings: 'Embeddings',
+        alphaSearchEnabled: '支持独立搜索（/v1/alpha/search）',
+        alphaSearchEnabledDesc: '默认开启以兼容已有账号。不支持此接口的上游请关闭；关闭后搜索请求会跳过该账号，不影响普通会话或 Responses 路由。',
         responsesStatusAutoSupported: '自动探测：Responses',
         responsesStatusAutoUnsupported: '自动探测：Chat Completions',
         responsesStatusAutoUnknown: '自动探测：未探测',

@@ -528,6 +528,29 @@ describe('BulkEditAccountModal', () => {
     expect(mixed.find('#bulk-edit-openai-image-size-tiers-enabled').exists()).toBe(false)
   })
 
+  it.each([true, false])('独立搜索可单独批量设为 %s，不修改其他端点能力', async (enabled) => {
+    const wrapper = mountModal({ selectedPlatforms: ['openai'], selectedTypes: ['apikey'] })
+    await wrapper.get('#bulk-edit-openai-alpha-search-apply').setValue(true)
+    await wrapper.get('[data-testid="bulk-edit-openai-alpha-search-enabled"]').setValue(enabled)
+    await wrapper.get('#bulk-edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+    expect(adminAPI.accounts.bulkUpdate).toHaveBeenCalledWith([1, 2], {
+      credentials: { openai_alpha_search_enabled: enabled }
+    })
+    wrapper.unmount()
+  })
+
+  it('混合平台或账号类型不显示独立搜索批量设置', () => {
+    for (const props of [
+      { selectedPlatforms: ['openai', 'anthropic'], selectedTypes: ['apikey'] },
+      { selectedPlatforms: ['openai'], selectedTypes: ['oauth', 'apikey'] }
+    ]) {
+      const wrapper = mountModal(props)
+      expect(wrapper.find('#bulk-edit-openai-alpha-search-apply').exists()).toBe(false)
+      wrapper.unmount()
+    }
+  })
+
   it('端点能力默认值提交 null，表示恢复两个默认端点', async () => {
     const wrapper = mountModal({
       selectedPlatforms: ['openai'],

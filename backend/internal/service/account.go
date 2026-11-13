@@ -1913,6 +1913,16 @@ func (a *Account) GetOpenAISessionID() string {
 	return strings.TrimSpace(a.GetExtraString("openai_session_id"))
 }
 
+// IsOpenAIAlphaSearchEnabled keeps legacy accounts enabled unless an operator
+// explicitly disables standalone search. It does not restrict model endpoints.
+func (a *Account) IsOpenAIAlphaSearchEnabled() bool {
+	if a == nil {
+		return false
+	}
+	enabled, configured := a.Credentials["openai_alpha_search_enabled"].(bool)
+	return !configured || enabled
+}
+
 func (a *Account) SupportsOpenAIEndpointCapability(capability OpenAIEndpointCapability) bool {
 	if a == nil {
 		return false
@@ -1962,6 +1972,9 @@ func (a *Account) SupportsOpenAIEndpointCapability(capability OpenAIEndpointCapa
 		// 配置集校验。
 		capability = OpenAIEndpointCapabilityChatCompletions
 	case OpenAIEndpointCapabilityAlphaSearch:
+		if !a.IsOpenAIAlphaSearchEnabled() {
+			return false
+		}
 		// alpha/search 的转发按账号类型分流：OAuth/PAT 走
 		// chatgpt.com/backend-api/codex/alpha/search，API key 走
 		// {base_url}/v1/alpha/search（见 openAIAlphaSearchURL），两类账号

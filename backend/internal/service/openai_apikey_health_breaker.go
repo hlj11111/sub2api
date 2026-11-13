@@ -28,7 +28,7 @@ func classifyOpenAIAPIKeyHealthFailure(err error) (int, []byte, bool) {
 	if errors.As(err, &failoverErr) {
 		// These failures already have dedicated recovery/state handling or are not
 		// attributable to the selected account.
-		if failoverErr.IsCredentialFailure() ||
+		if failoverErr.EndpointUnsupported || failoverErr.IsCredentialFailure() ||
 			failoverErr.RequestScopedTransient ||
 			failoverErr.RetryableOnSameAccount ||
 			failoverErr.Scope == GatewayFailureScopeRequest ||

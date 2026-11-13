@@ -36,6 +36,14 @@ func (s *OpenAIGatewayService) ForwardAlphaSearch(ctx context.Context, c *gin.Co
 	if s == nil || c == nil || account == nil {
 		return nil, fmt.Errorf("service, context, and account are required")
 	}
+	// Also enforce the operator switch for callers that bypass the scheduler.
+	if !account.IsOpenAIAlphaSearchEnabled() {
+		return nil, &UpstreamFailoverError{
+			StatusCode:          http.StatusServiceUnavailable,
+			EndpointUnsupported: true,
+			ResponseBody:        []byte(`{"error":{"message":"Standalone search is disabled for this account"}}`),
+		}
+	}
 	if _, err := s.prepareCodexAccountIdentitySource(ctx, c, account); err != nil {
 		return nil, err
 	}
@@ -96,9 +104,19 @@ func (s *OpenAIGatewayService) ForwardAlphaSearch(ctx context.Context, c *gin.Co
 	}
 
 	if resp.StatusCode >= http.StatusBadRequest {
+		// Some relays report a missing tool endpoint as 500 instead of 404.
+		// This says nothing about model health: do not cool down the model,
+		// retry the same account, or feed account-wide scheduler/health stats.
+		if isOpenAIAlphaSearchEndpointUnsupported(account, resp.StatusCode, respBody) {
+			return nil, &UpstreamFailoverError{
+				StatusCode:          resp.StatusCode,
+				ResponseBody:        respBody,
+				ResponseHeaders:     resp.Header.Clone(),
+				EndpointUnsupported: true,
+			}
+		}
 		upstreamMessage := sanitizeUpstreamErrorMessage(strings.TrimSpace(extractUpstreamErrorMessage(respBody)))
-		if s.shouldFailoverOpenAIUpstreamResponse(account, resp.StatusCode, upstreamMessage, respBody) ||
-			isOpenAIAlphaSearchEndpointUnsupported(account, resp.StatusCode) {
+		if s.shouldFailoverOpenAIUpstreamResponse(account, resp.StatusCode, upstreamMessage, respBody) {
 			resp.Body = io.NopCloser(bytes.NewReader(respBody))
 			// alpha/search 是独立的工具端点，单次 401 不能证明账号的模型调用
 			// 凭据全局失效。若沿用通用 401 逻辑，PAT 会因没有 refresh_token
@@ -539,11 +557,24 @@ func (s *OpenAIGatewayService) ensureOpenAIAlphaSearchAuthMetadata(ctx context.C
 // 意味着所选上游（官方平台或第三方中转）不提供该端点——应换号重试，而
 // 不是把 404 透传给客户端，否则混合分组里 OAuth 账号明明可以承接搜索，
 // 请求却可能死在先被选中的 API key 账号上。
-func isOpenAIAlphaSearchEndpointUnsupported(account *Account, statusCode int) bool {
+func isOpenAIAlphaSearchEndpointUnsupported(account *Account, statusCode int, responseBody []byte) bool {
 	if account == nil || account.Type != AccountTypeAPIKey {
 		return false
 	}
-	return statusCode == http.StatusNotFound || statusCode == http.StatusMethodNotAllowed
+	if statusCode == http.StatusNotFound || statusCode == http.StatusMethodNotAllowed {
+		return true
+	}
+	if statusCode != http.StatusBadRequest && statusCode != http.StatusInternalServerError && statusCode != http.StatusNotImplemented {
+		return false
+	}
+	message := strings.ToLower(extractUpstreamErrorMessage(responseBody))
+	if !strings.Contains(message, "/alpha/search") {
+		return false
+	}
+	return strings.Contains(message, "does not support") ||
+		strings.Contains(message, "not supported") ||
+		strings.Contains(message, "unsupported") ||
+		strings.Contains(message, "not implemented")
 }
 
 func shouldApplyOpenAIAlphaSearchAccountErrorSideEffects(statusCode int) bool {
