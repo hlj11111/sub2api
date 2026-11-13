@@ -77,5 +77,11 @@ messages. They now assert the fork's existing local diagnostic codes and Chinese
 messages while retaining the upstream status, validation and body-safety checks.
 Production behavior was not changed to accommodate these test expectations.
 
+The security scan identified reachable standard-library advisory GO-2026-6859
+(`net/http` on Go 1.27.3, fixed in Go 1.27.4). The Go module minimum, both
+Docker build defaults and all CI/release version assertions now consistently
+use Go 1.27.4. The vulnerability check remains enforced without exceptions.
+See https://go.dev/doc/devel/release#go1.27.4.
+
 Builds and backend/frontend tests run on GitHub-hosted runners. This code merge
 does not authorize production migration execution, paid API calls or deployment.
