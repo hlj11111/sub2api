@@ -63,5 +63,13 @@ checks, runtime resource checks and the Caddy cache/SSE policy check pass.
 The only diff whitespace warning is an existing extra blank line in upstream
 migration 250; the upstream SQL is retained byte for byte.
 
+At integration time GitHub refused CI dispatch with HTTP 422, "Actions has been
+disabled for this repository." Enabling the individual CI workflow did not
+remove the repository restriction. The configured token cannot administer
+repository Actions permissions (HTTP 403). CI now supports workflow_dispatch so
+this branch can be validated after the owner enables Actions. Until all required
+jobs pass, the integration remains on `codex/merge-0.2.21-preserve-fork` and main
+must not be advanced.
+
 Builds and backend/frontend tests run on GitHub-hosted runners. This code merge
 does not authorize production migration execution, paid API calls or deployment.
