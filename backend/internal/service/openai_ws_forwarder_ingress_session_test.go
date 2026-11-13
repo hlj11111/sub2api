@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -3159,6 +3160,14 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_StoreDisabledStr
 }
 
 func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_StoreDisabledPreflightPingFailReplaysFunctionCallOutputWithContext(t *testing.T) {
+	for _, continuity := range []bool{false, true} {
+		t.Run(fmt.Sprintf("continuity=%v", continuity), func(t *testing.T) {
+			testIngressPreflightReplayWithContext(t, continuity)
+		})
+	}
+}
+
+func testIngressPreflightReplayWithContext(t *testing.T, continuity bool) {
 	gin.SetMode(gin.TestMode)
 	prevPreflightPingIdle := openAIWSIngressPreflightPingIdle
 	openAIWSIngressPreflightPingIdle = 0
@@ -3183,7 +3192,7 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_StoreDisabledPre
 
 	firstConn := &openAIWSPreflightFailConn{
 		events: [][]byte{
-			[]byte(`{"type":"response.completed","response":{"id":"resp_turn_ping_replay_ctx_1","model":"gpt-5.1","output":[{"type":"function_call","id":"fc_replay_1","call_id":"call_replay_1","name":"shell","arguments":"{}"}],"usage":{"input_tokens":1,"output_tokens":1}}}`),
+			[]byte(`{"type":"response.completed","response":{"id":"resp_turn_ping_replay_ctx_1","model":"gpt-5.1","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Preserve the decision before calling the tool"}]},{"type":"function_call","id":"fc_replay_1","call_id":"call_replay_1","name":"shell","arguments":"{}"}],"usage":{"input_tokens":1,"output_tokens":1}}}`),
 		},
 	}
 	secondConn := &openAIWSCaptureConn{
@@ -3196,6 +3205,7 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_StoreDisabledPre
 	}
 	pool := newOpenAIWSConnPool(cfg)
 	pool.setClientDialerForTest(dialer)
+	t.Cleanup(pool.Close)
 
 	svc := &OpenAIGatewayService{
 		cfg:              cfg,
@@ -3254,7 +3264,12 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_StoreDisabledPre
 			return
 		}
 
-		serverErrCh <- svc.ProxyResponsesWebSocketFromClient(r.Context(), ginCtx, conn, account, "sk-test", firstMessage, nil)
+		ctx := r.Context()
+		if continuity {
+			ctx = context.WithValue(ctx, openAIContinuityKey{}, &openAIContinuityState{enabled: true})
+			ginCtx.Request = ginCtx.Request.WithContext(ctx)
+		}
+		serverErrCh <- svc.ProxyResponsesWebSocketFromClient(ctx, ginCtx, conn, account, "sk-test", firstMessage, nil)
 	}))
 	defer wsServer.Close()
 
@@ -3305,12 +3320,21 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_StoreDisabledPre
 	require.Len(t, secondWrites, 1)
 	secondWrite := requestToJSONString(secondWrites[0])
 	require.False(t, gjson.Get(secondWrite, "previous_response_id").Exists())
-	require.Equal(t, 3, len(gjson.Get(secondWrite, "input").Array()))
-	require.Equal(t, "message", gjson.Get(secondWrite, "input.0.type").String())
-	require.Equal(t, "function_call", gjson.Get(secondWrite, "input.1.type").String())
-	require.Equal(t, "call_replay_1", gjson.Get(secondWrite, "input.1.call_id").String())
-	require.Equal(t, "function_call_output", gjson.Get(secondWrite, "input.2.type").String())
-	require.Equal(t, "call_replay_1", gjson.Get(secondWrite, "input.2.call_id").String())
+	items := gjson.Get(secondWrite, "input").Array()
+	callIndex := 1
+	if continuity {
+		callIndex = 2
+	}
+	require.Len(t, items, callIndex+2)
+	if continuity {
+		require.Equal(t, "assistant", items[1].Get("role").String())
+		require.Contains(t, items[1].Raw, "Preserve the decision before calling the tool")
+	}
+	require.Equal(t, "message", items[0].Get("type").String())
+	require.Equal(t, "function_call", items[callIndex].Get("type").String())
+	require.Equal(t, "call_replay_1", items[callIndex].Get("call_id").String())
+	require.Equal(t, "function_call_output", items[callIndex+1].Get("type").String())
+	require.Equal(t, "call_replay_1", items[callIndex+1].Get("call_id").String())
 }
 
 func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_StoreDisabledPreflightPingFailClosesWhenFunctionCallOutputNeedsPreviousResponseID(t *testing.T) {

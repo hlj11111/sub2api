@@ -252,7 +252,8 @@ func TestContinuityDrainBoundsOrphanAndAllowsTerminalCommitGrace(t *testing.T) {
 	parent, cancel := context.WithCancel(context.Background())
 	ctx, finish := withContinuityDrainGrace(parent, 30*time.Millisecond)
 	defer finish()
-	upstream, _ := detachUpstreamContext(ctx)
+	upstream, _ := detachUpstreamContext(ctx, time.Hour)
+	require.Same(t, ctx.Value(continuityUpstreamLifetimeKey{}), upstream, "transport drain defaults must not detach the session lifetime again")
 	cancel()
 	require.NoError(t, upstream.Err(), "terminal commit retains its short grace")
 	select {
