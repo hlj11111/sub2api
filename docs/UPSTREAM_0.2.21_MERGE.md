@@ -38,7 +38,7 @@ fallbacks, composite alias safeguards and media-specific billing remain intact.
 
 ## Migrations
 
-All existing SQL migrations, including the four fork migrations, are unchanged.
+All 300 existing SQL migrations, including the four fork migrations, are unchanged.
 Six upstream SQL files are added with distinct full filenames (the two `249`
 prefixes are intentional). They add scoped admin/MCP tables, image-count billing,
 cache-write fields and a concurrent usage-cost index. Migration 246 enables image
@@ -85,3 +85,24 @@ See https://go.dev/doc/devel/release#go1.27.4.
 
 Builds and backend/frontend tests run on GitHub-hosted runners. This code merge
 does not authorize production migration execution, paid API calls or deployment.
+
+## Final validation evidence (2026-11-13)
+
+- Integrated application code at `58058a8a514390efe2ec6d6409dd7e977f50e9b6`:
+  all five CI jobs passed, including backend unit/integration tests and the
+  macOS Apple-container lifecycle tests:
+  https://github.com/hlj11111/sub2api/actions/runs/43403750694.
+- Final build-toolchain patch at `1c46c383ccd6fd48c3d5045fcee2bc19b59db329`:
+  backend unit/integration tests, frontend checks, golangci-lint and release
+  helpers passed:
+  https://github.com/hlj11111/sub2api/actions/runs/43404223485.
+  The macOS shell job remained queued awaiting a hosted runner when this record
+  was written. Its Apple script, lifecycle tests, fixtures and all shell test
+  files are byte-identical to the preceding fully successful run. Portable
+  Compose, runtime-resource and Caddy checks were also rerun successfully after
+  the toolchain patch. The queued repeat is not reported as a completed pass.
+- Both final frontend and backend security scans passed:
+  https://github.com/hlj11111/sub2api/actions/runs/43404223534.
+
+Only this validation document changes after the final tested code commit.
+No release tag/image was published and production was not switched by this merge.
