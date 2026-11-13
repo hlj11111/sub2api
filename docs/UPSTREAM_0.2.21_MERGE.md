@@ -58,5 +58,10 @@ Additional merge regression coverage checks complete assistant/tool history on
 WS reconnect with continuity enabled, recovery defaults alongside new upstream
 configuration, and continuity drain enforcement with a longer transport timeout.
 
+Local release matrix tests (10 tests), Compose security/simple-mode/gateway-env
+checks, runtime resource checks and the Caddy cache/SSE policy check pass.
+The only diff whitespace warning is an existing extra blank line in upstream
+migration 250; the upstream SQL is retained byte for byte.
+
 Builds and backend/frontend tests run on GitHub-hosted runners. This code merge
 does not authorize production migration execution, paid API calls or deployment.
