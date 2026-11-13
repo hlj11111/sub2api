@@ -96,11 +96,14 @@ does not authorize production migration execution, paid API calls or deployment.
   backend unit/integration tests, frontend checks, golangci-lint and release
   helpers passed:
   https://github.com/hlj11111/sub2api/actions/runs/43404223485.
-  The macOS shell job remained queued awaiting a hosted runner when this record
-  was written. Its Apple script, lifecycle tests, fixtures and all shell test
-  files are byte-identical to the preceding fully successful run. Portable
-  Compose, runtime-resource and Caddy checks were also rerun successfully after
-  the toolchain patch. The queued repeat is not reported as a completed pass.
+  GitHub cancelled the repeated macOS shell job at 10:02:22 UTC after it could
+  not acquire a hosted runner. The check annotation states: "The job was not
+  acquired by Runner of type hosted even after multiple attempts" and reports
+  macOS arm64 capacity constraints. Its Apple script, lifecycle tests, fixtures
+  and all shell test files are byte-identical to the preceding fully successful
+  run. Portable Compose, runtime-resource and Caddy checks were also rerun
+  successfully after the toolchain patch. This cancelled repeat is not reported
+  as a completed pass; macOS coverage comes from the preceding successful run.
 - Both final frontend and backend security scans passed:
   https://github.com/hlj11111/sub2api/actions/runs/43404223534.
 
